@@ -1,0 +1,111 @@
+# Deploys the API to the test server on every push to main (or by hand from the Actions tab).
+#
+# No AWS keys are stored: GitHub signs in to AWS through the pic-events-github-deploy role
+# (OpenID Connect), which may only run a shell command, via Systems Manager, on servers tagged
+# App=<DEPLOY_TAG>. The server pulls main, rebuilds the containers from its own .env and runs
+# any new migrations.
+#
+# Repository settings (Settings > Secrets and variables > Actions):
+#   secret    AWS_DEPLOY_ROLE_ARN  the role's ARN
+#   variable  AWS_REGION           eu-west-2
+#   variable  DEPLOY_TAG           pic-events-api (the server's App tag)
+#   variable  APP_DIR              where the repo is cloned on the server, e.g. /home/ubuntu/EventHub_db
+
+name: Deploy API
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# one deploy at a time; a second push waits for the first to finish
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # to sign in to AWS with the role
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check the repository settings
+        env:
+          ROLE: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          REGION: ${{ vars.AWS_REGION }}
+          TAG: ${{ vars.DEPLOY_TAG }}
+          DIR: ${{ vars.APP_DIR }}
+        run: |
+          missing=""
+          [ -n "$ROLE" ] || missing="$missing AWS_DEPLOY_ROLE_ARN (secret)"
+          [ -n "$REGION" ] || missing="$missing AWS_REGION (variable)"
+          [ -n "$TAG" ] || missing="$missing DEPLOY_TAG (variable)"
+          [ -n "$DIR" ] || missing="$missing APP_DIR (variable)"
+          if [ -n "$missing" ]; then
+            echo "::error::Set these under Settings > Secrets and variables > Actions:$missing"
+            exit 1
+          fi
+
+      - name: Sign in to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy on the server
+        env:
+          TAG: ${{ vars.DEPLOY_TAG }}
+          APP_DIR: ${{ vars.APP_DIR }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Runs on the server as root. git runs as the folder's owner, whose deploy key can
+          # read the private repo; docker runs as root. --ff-only refuses to overwrite anything
+          # changed by hand on the server.
+          cat > deploy.sh <<'SCRIPT'
+          set -euo pipefail
+          cd "__APP_DIR__"
+          owner=$(stat -c %U .)
+          sudo -u "$owner" git fetch --prune origin main
+          sudo -u "$owner" git merge --ff-only origin/main
+          echo "Deploying $(sudo -u "$owner" git log -1 --format='%h %s')"
+          docker compose -f docker-compose.prod.yml up -d --build
+          docker compose -f docker-compose.prod.yml exec -T api npx typeorm migration:run -d dist/config/data-source.js
+          docker image prune -f
+          docker compose -f docker-compose.prod.yml ps
+          SCRIPT
+          sed -i "s#__APP_DIR__#${APP_DIR}#" deploy.sh
+          jq -n --rawfile s deploy.sh '{commands: ($s | split("\n")), executionTimeout: ["1800"]}' > params.json
+
+          id=$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --targets "Key=tag:App,Values=${TAG}" \
+            --parameters file://params.json \
+            --timeout-seconds 600 \
+            --comment "deploy ${SHA:0:7}" \
+            --query Command.CommandId --output text)
+          echo "Command ${id} sent to servers tagged App=${TAG}"
+
+          # wait for the server(s) to finish, up to 35 minutes
+          for i in $(seq 1 210); do
+            sleep 10
+            statuses=$(aws ssm list-command-invocations --command-id "$id" --query 'CommandInvocations[].Status' --output text)
+            if [ -z "$statuses" ] && [ "$i" -ge 6 ]; then
+              echo "::error::No server picked up the command. Check the server is tagged App=${TAG}, has the pic-events-ssm role and shows under Systems Manager > Fleet Manager."
+              exit 1
+            fi
+            if [ -n "$statuses" ] && ! echo "$statuses" | grep -qE 'Pending|InProgress|Delayed'; then break; fi
+          done
+
+          aws ssm list-command-invocations --command-id "$id" --details \
+            --query 'CommandInvocations[].{server:InstanceId,status:Status,output:CommandPlugins[0].Output}' --output json \
+            | jq -r '.[] | "=== \(.server): \(.status) ===\n\(.output)"'
+
+          if ! aws ssm list-command-invocations --command-id "$id" --query 'CommandInvocations[].Status' --output json | jq -e 'length > 0 and all(. == "Success")' > /dev/null; then
+            echo "::error::The deploy did not succeed on every server. The output above says where it stopped."
+            exit 1
+          fi
