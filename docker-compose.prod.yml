@@ -1,0 +1,98 @@
+# Production stack: 2 API replicas behind Caddy, with Postgres and Redis
+# either as containers here or as managed services (RDS / ElastiCache).
+#
+# Usage:  docker compose -f docker-compose.prod.yml up -d --build
+#
+# ---------------------------------------------------------------------------
+# Postgres and Redis are optional containers (compose profiles).
+#
+#   Single box, everything here (the original setup) - in .env:
+#       COMPOSE_PROFILES=db,cache
+#       DB_HOST=postgres          # the compose service name, not localhost
+#       REDIS_HOST=redis
+#
+#   Managed Postgres (RDS) - drop `db` from COMPOSE_PROFILES and point the
+#   API at the instance:
+#       COMPOSE_PROFILES=cache
+#       DB_HOST=<name>.<id>.<region>.rds.amazonaws.com
+#       DB_PORT=5432  DB_USER=...  DB_PASSWORD=...  DB_NAME=...
+#   The app and the migration data source both read DB_HOST/DB_PORT/DB_USER/
+#   DB_PASSWORD/DB_NAME (there is no DATABASE_URL); migrations run the same
+#   way, from inside an api container, against whatever DB_HOST names.
+#   Size DB_POOL_MAX x replicas below the instance's max_connections.
+#
+#   Managed Redis (ElastiCache, Redis OSS, no cluster mode) - drop `cache`:
+#       COMPOSE_PROFILES=db        # or empty when both are managed
+#       REDIS_HOST=<name>.<id>.cache.amazonaws.com
+#       REDIS_PORT=6379
+#   The client connects without AUTH or TLS, so use an in-VPC endpoint with
+#   in-transit encryption and AUTH off, reachable only from the API's
+#   security group. Redis carries the socket.io adapter, BullMQ queues, live
+#   vote counts and rate limits, so every replica must use the same one.
+#
+# With neither profile active, nothing here stores data: the volumes below
+# stay unused and can be removed once the data has been migrated.
+# ---------------------------------------------------------------------------
+# Scaling: `replicas` runs N identical API containers. Caddy finds them by
+# DNS (see Caddyfile) and pins each client to one with a cookie, which the
+# socket.io long-polling transport needs; websockets are carried as-is.
+# Cross-instance broadcasts go through the Redis adapter. BullMQ workers
+# run inside every replica; BullMQ hands each job to exactly one of them.
+# ---------------------------------------------------------------------------
+
+services:
+  api:
+    build: .
+    image: pic-events-api:latest
+    restart: unless-stopped
+    env_file: .env
+    deploy:
+      replicas: ${API_REPLICAS:-2}
+    # `required: false` lets the api start when the container is not part of
+    # the active profiles (managed database / cache instead). Needs Docker
+    # Compose v2.20 or later.
+    depends_on:
+      postgres:
+        condition: service_started
+        required: false
+      redis:
+        condition: service_started
+        required: false
+    expose: ['3000']
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ['db']
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+      # the API opens DB_POOL_MAX (default 30) per replica
+    command: ['postgres', '-c', 'max_connections=200']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    profiles: ['cache']
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ['80:80', '443:443']
+    environment:
+      # the public API host name Caddy serves and fetches a certificate for
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env, e.g. api.example.org}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:

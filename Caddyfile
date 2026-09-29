@@ -1,0 +1,38 @@
+# Reverse proxy for the API replicas (docker-compose.prod.yml).
+#
+# API_DOMAIN comes from the caddy service's environment. Caddy obtains and
+# renews its TLS certificate automatically; the name must resolve to this
+# host before first start.
+
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy {
+		# Every api replica, found through Docker's DNS and re-resolved every
+		# few seconds, so scaling or restarting a replica needs no reload.
+		dynamic a {
+			name api
+			port 3000
+			refresh 5s
+		}
+
+		# Sticky sessions. socket.io's long-polling transport sends a series
+		# of HTTP requests that must all reach the instance holding that
+		# session id; on weak venue wifi many phones start (or stay) on
+		# polling. The cookie pins a client to one replica. Websocket
+		# upgrades are proxied natively and stay on their connection.
+		lb_policy cookie pic_lb
+		# When a pinned replica is gone (restart, deploy), retry another
+		# rather than failing the request.
+		lb_try_duration 5s
+		lb_try_interval 250ms
+
+		# Passive health: stop sending to a replica that refuses connections.
+		fail_duration 30s
+		max_fails 3
+
+		# Caddy sets X-Forwarded-For to the real client address (it does not
+		# trust one sent by the client); the API trusts exactly one proxy hop
+		# (TRUST_PROXY_HOPS=1), which is what rate limiting keys on.
+	}
+}
