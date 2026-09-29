@@ -87,6 +87,25 @@ jobs:
           set -euo pipefail
           cd "__APP_DIR__"
           owner=$(stat -c %U .)
+
+          # first run on a fresh server: Docker (from Docker's own installer, not the snap, which
+          # root's shell here cannot see) and 2 GB of swap so the image build fits in 2 GB of memory
+          if ! [ -x /usr/bin/docker ]; then
+            echo "Installing Docker..."
+            if command -v snap >/dev/null && snap list docker >/dev/null 2>&1; then snap remove docker; fi
+            curl -fsSL https://get.docker.com | sh
+            usermod -aG docker "$owner"
+          fi
+          if ! swapon --show | grep -q .; then
+            echo "Adding 2 GB of swap..."
+            fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+            grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          fi
+          if ! [ -f .env ]; then
+            echo "No .env in $(pwd). Create it on the server (Session Manager: nano $(pwd)/.env), then deploy again."
+            exit 1
+          fi
+
           sudo -u "$owner" git fetch --prune origin main
           sudo -u "$owner" git merge --ff-only origin/main
           echo "Deploying $(sudo -u "$owner" git log -1 --format='%h %s')"
