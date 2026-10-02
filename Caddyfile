@@ -7,6 +7,13 @@
 {$API_DOMAIN} {
 	encode zstd gzip
 
+	# Uploads, when they are stored on this server (the `storage` profile in
+	# docker-compose.prod.yml, bucket pic-uploads). The Host header passes
+	# through unchanged, which the signed upload and download links are
+	# signed for. Placed before the API: Caddy tries the path-matched proxy
+	# first.
+	reverse_proxy /pic-uploads/* storage:9000
+
 	reverse_proxy {
 		# Every api replica, found through Docker's DNS and re-resolved every
 		# few seconds, so scaling or restarting a replica needs no reload.

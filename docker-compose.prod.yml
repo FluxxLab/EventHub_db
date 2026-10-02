@@ -80,6 +80,27 @@ services:
     volumes:
       - redisdata:/data
 
+  # Uploads on this server instead of S3 (profile `storage`): an S3-compatible
+  # store Caddy serves at https://<API_DOMAIN>/pic-uploads/. In .env:
+  #     COMPOSE_PROFILES=db,cache,storage
+  #     S3_BUCKET=pic-uploads   S3_REGION=us-east-1
+  #     S3_ENDPOINT=https://<API_DOMAIN>
+  #     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY = the store's own keys (any
+  #     long random values; they are set here and used by the API)
+  # then once: create the bucket with scripts/storage-init.ts.
+  # The files live in the s3data volume on this disk: back it up with the
+  # database.
+  storage:
+    image: rustfs/rustfs:1.0.0
+    profiles: ['storage']
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:-}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    expose: ['9000']
+    volumes:
+      - s3data:/data
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -95,4 +116,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  s3data:
   caddydata:
