@@ -27,6 +27,7 @@ import {
 import { campaignImages, type CampaignImagePart } from './campaign-images';
 import {
   CAMPAIGN_IMAGE_FOLDER,
+  CAMPAIGN_IMAGE_TYPES,
   type CampaignDesignDto,
   type SaveCampaignDto,
 } from './dto/campaign.dto';
@@ -97,13 +98,24 @@ export class CampaignsService {
    */
   async eventDesign(editionId: string): Promise<CampaignDesign> {
     const edition = await this.editions.findById(editionId);
-    // only pictures in our storage can be linked from an email
-    const ours = (stored: string | null) =>
-      stored && !/^https?:\/\//.test(stored) ? stored : null;
+    // only pictures in our storage can be linked from an email, and only in
+    // formats every mail app shows (Outlook shows no WebP)
+    const usable = async (stored: string | null) => {
+      if (!stored || /^https?:\/\//.test(stored)) return null;
+      const head = await this.storage.headObject(stored).catch(() => null);
+      return head?.contentType &&
+        (CAMPAIGN_IMAGE_TYPES as readonly string[]).includes(head.contentType)
+        ? stored
+        : null;
+    };
+    const [logo, banner] = await Promise.all([
+      usable(edition.logoImage),
+      usable(edition.coverImage),
+    ]);
     return {
       ...DEFAULT_DESIGN,
-      logo: ours(edition.logoImage),
-      banner: ours(edition.coverImage),
+      logo,
+      banner,
       headerColor: edition.brandColor ?? DEFAULT_DESIGN.headerColor,
       buttonColor: edition.brandColor ?? DEFAULT_DESIGN.buttonColor,
     };
