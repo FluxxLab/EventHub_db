@@ -1,5 +1,7 @@
 import {
+  DEFAULT_DESIGN,
   merge,
+  readsLight,
   renderCampaign,
   unknownFields,
   type CampaignRecipient,
@@ -67,5 +69,74 @@ describe('campaign emails', () => {
     );
     expect(mail.html).not.toContain('border-radius:8px"><a');
     expect(mail.text.split('\n\n')).toHaveLength(2);
+  });
+
+  describe('design', () => {
+    const content = {
+      subject: 'Hello',
+      body: 'Dear {{first_name}},',
+      buttonLabel: 'Programme',
+      buttonUrl: 'https://pic.org/p',
+    };
+
+    it('keeps the PIC layout without a design', () => {
+      const { html } = renderCampaign(
+        { ...content, design: null },
+        ada,
+        'GS-27',
+      );
+      expect(html).toContain('background:#002d74;padding:20px 28px');
+      expect(html).toContain('Policy Innovation Centre</p>');
+      expect(html).not.toContain('<img');
+    });
+
+    it('shows the logo and banner, in the chosen colours, with the footer line', () => {
+      const { html, text } = renderCampaign(
+        {
+          ...content,
+          design: {
+            ...DEFAULT_DESIGN,
+            logo: 'campaigns/a',
+            banner: 'campaigns/b',
+            headerColor: '#ffffff',
+            buttonColor: '#d2042d',
+            eyebrow: '',
+            footer: 'Questions? events@pic.org <b>',
+          },
+        },
+        ada,
+        'GS-27',
+        null,
+        null,
+        { logo: 'https://api/img/logo', banner: 'https://api/img/banner' },
+      );
+      expect(html).toContain('<img src="https://api/img/logo"');
+      expect(html).toContain('<img src="https://api/img/banner"');
+      // a white header gets dark text, and the hidden line is not there
+      expect(html).toContain('background:#ffffff;padding:20px 28px');
+      expect(html).toContain('color:#111111">GS-27</p>');
+      expect(html).not.toContain('text-transform:uppercase');
+      expect(html).toContain('background:#d2042d;border-radius:8px');
+      expect(html).toContain('Questions? events@pic.org &lt;b&gt;<br><br>');
+      expect(text).toContain('Questions? events@pic.org <b>');
+    });
+
+    it('leaves the header out when it would be empty', () => {
+      const { html } = renderCampaign(
+        {
+          ...content,
+          design: { ...DEFAULT_DESIGN, eyebrow: '', showEventName: false },
+        },
+        ada,
+        'GS-27',
+      );
+      expect(html).not.toContain('padding:20px 28px');
+    });
+
+    it('picks light text for dark colours and dark text for light ones', () => {
+      expect(readsLight('#002d74')).toBe(true);
+      expect(readsLight('#ffffff')).toBe(false);
+      expect(readsLight('#f2b705')).toBe(false);
+    });
   });
 });

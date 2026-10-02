@@ -3,11 +3,13 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
   IsUrl,
   IsUUID,
+  Matches,
   MaxLength,
   MinLength,
   ValidateIf,
@@ -29,6 +31,60 @@ export class CampaignAudienceDto {
   @ArrayMaxSize(50)
   @IsUUID('all', { each: true })
   ticketTypeIds: string[];
+}
+
+/** Pictures in a campaign: what email apps show reliably. */
+export const CAMPAIGN_IMAGE_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+] as const;
+export const CAMPAIGN_IMAGE_FOLDER = 'campaigns';
+
+const HEX = /^#[0-9a-f]{6}$/i;
+/** A storage key of ours (a campaign upload, or the event's own logo or cover), never a URL. */
+const STORAGE_KEY = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9/_.-]{0,499}$/;
+
+export class CampaignImageUploadDto {
+  @ApiProperty({ enum: CAMPAIGN_IMAGE_TYPES, example: 'image/png' })
+  @IsIn(CAMPAIGN_IMAGE_TYPES)
+  contentType: string;
+}
+
+export class CampaignDesignDto {
+  @ApiPropertyOptional({ nullable: true, description: 'Storage key' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Matches(STORAGE_KEY, { message: 'logo must be an uploaded picture' })
+  logo: string | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Storage key' })
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @Matches(STORAGE_KEY, { message: 'banner must be an uploaded picture' })
+  banner: string | null;
+
+  @ApiProperty({ example: '#002d74' })
+  @Matches(HEX, { message: 'headerColor must be a colour like #002d74' })
+  headerColor: string;
+
+  @ApiProperty({ example: '#002d74' })
+  @Matches(HEX, { message: 'buttonColor must be a colour like #002d74' })
+  buttonColor: string;
+
+  @ApiProperty({ example: 'Policy Innovation Centre' })
+  @IsString()
+  @MaxLength(80)
+  eyebrow: string;
+
+  @ApiProperty()
+  @IsBoolean()
+  showEventName: boolean;
+
+  @ApiProperty({ example: 'Questions? events@policycentre.org' })
+  @IsString()
+  @MaxLength(500)
+  footer: string;
 }
 
 export class SaveCampaignDto {
@@ -68,6 +124,16 @@ export class SaveCampaignDto {
   @ValidateNested()
   @Type(() => CampaignAudienceDto)
   audience: CampaignAudienceDto;
+
+  @ApiPropertyOptional({
+    type: CampaignDesignDto,
+    nullable: true,
+    description: 'Left out keeps the saved design; null is the PIC layout',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CampaignDesignDto)
+  design?: CampaignDesignDto | null;
 }
 
 export class AudienceSizeDto {

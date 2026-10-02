@@ -9,6 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Queue } from 'bullmq';
 import { DataSource, Repository } from 'typeorm';
+import { StorageService } from '../common/storage/storage.service';
 import { Delegate } from '../delegate/entities/delegate.entity';
 import { EditionsService } from '../editions/editions.service';
 import type { EmailSender } from '../notifications/email/email-sender.interface';
@@ -16,12 +17,19 @@ import { EMAIL_SENDER } from '../notifications/email/email-sender.interface';
 import { TrackingLinks } from './tracking-links';
 import { UnsubscribeLinks } from './unsubscribe-links';
 import {
+  DEFAULT_DESIGN,
   MERGE_FIELDS,
   renderCampaign,
   unknownFields,
+  type CampaignDesign,
   type CampaignRecipient,
 } from './campaign-email';
-import type { SaveCampaignDto } from './dto/campaign.dto';
+import { campaignImages, type CampaignImagePart } from './campaign-images';
+import {
+  CAMPAIGN_IMAGE_FOLDER,
+  type CampaignDesignDto,
+  type SaveCampaignDto,
+} from './dto/campaign.dto';
 import { CampaignRecipientRow } from './entities/campaign-recipient.entity';
 import {
   EmailCampaign,
@@ -52,6 +60,7 @@ export class CampaignsService {
     private readonly queue: Queue<CampaignJob>,
     private readonly links: UnsubscribeLinks,
     private readonly tracking: TrackingLinks,
+    private readonly storage: StorageService,
   ) {}
 
   /** Every campaign email carries an unsubscribe link, so none goes without the address it points at. */
@@ -63,32 +72,90 @@ export class CampaignsService {
     }
   }
 
-  list(editionId: string): Promise<EmailCampaign[]> {
-    return this.campaigns.find({
+  /** The edition's campaigns, newest first, with the design's pictures signed for the console's preview. */
+  async list(editionId: string) {
+    const rows = await this.campaigns.find({
       where: { editionId },
       order: { createdAt: 'DESC' },
     });
+    return Promise.all(rows.map((c) => this.withPictures(c)));
   }
 
-  async create(
-    editionId: string,
-    staffId: string,
-    dto: SaveCampaignDto,
-  ): Promise<EmailCampaign> {
-    await this.editions.card(editionId);
-    return this.campaigns.save(
+  private async withPictures<T extends { design: CampaignDesign | null }>(
+    row: T,
+  ) {
+    const [logoUrl, bannerUrl] = await Promise.all([
+      this.storage.resolveStoredUrl(row.design?.logo),
+      this.storage.resolveStoredUrl(row.design?.banner),
+    ]);
+    return { ...row, logoUrl, bannerUrl };
+  }
+
+  /**
+   * Where a new campaign's design starts: the event's own logo, cover picture
+   * and brand colour (set in Events), on the PIC layout otherwise.
+   */
+  async eventDesign(editionId: string): Promise<CampaignDesign> {
+    const edition = await this.editions.findById(editionId);
+    // only pictures in our storage can be linked from an email
+    const ours = (stored: string | null) =>
+      stored && !/^https?:\/\//.test(stored) ? stored : null;
+    return {
+      ...DEFAULT_DESIGN,
+      logo: ours(edition.logoImage),
+      banner: ours(edition.coverImage),
+      headerColor: edition.brandColor ?? DEFAULT_DESIGN.headerColor,
+      buttonColor: edition.brandColor ?? DEFAULT_DESIGN.buttonColor,
+    };
+  }
+
+  /** The event's design for a new campaign, with its pictures signed for the preview. */
+  async designDefault(editionId: string) {
+    return this.withPictures({ design: await this.eventDesign(editionId) });
+  }
+
+  /** Where the console PUTs a logo or banner (PNG, JPG or GIF) before saving the design with the key. */
+  presignImage(contentType: string) {
+    return this.storage.presignUpload({
+      folder: CAMPAIGN_IMAGE_FOLDER,
+      contentType,
+    });
+  }
+
+  /** The storage key behind a picture in a campaign's emails, or null. */
+  async pictureKey(
+    id: string,
+    part: CampaignImagePart,
+  ): Promise<string | null> {
+    const campaign = await this.campaigns.findOne({
+      where: { id },
+      select: { id: true, design: true },
+    });
+    return campaign?.design?.[part] ?? null;
+  }
+
+  async create(editionId: string, staffId: string, dto: SaveCampaignDto) {
+    const content = this.content(dto);
+    const saved = await this.campaigns.save(
       this.campaigns.create({
         editionId,
         createdBy: staffId,
-        ...this.content(dto),
+        ...content,
+        design:
+          content.design === undefined
+            ? await this.eventDesign(editionId)
+            : content.design,
       }),
     );
+    return this.withPictures(saved);
   }
 
-  async update(id: string, dto: SaveCampaignDto): Promise<EmailCampaign> {
+  async update(id: string, dto: SaveCampaignDto) {
     const campaign = await this.draft(id);
-    Object.assign(campaign, this.content(dto));
-    return this.campaigns.save(campaign);
+    const content = this.content(dto);
+    if (content.design === undefined) delete content.design;
+    Object.assign(campaign, content);
+    return this.withPictures(await this.campaigns.save(campaign));
   }
 
   async remove(id: string): Promise<void> {
@@ -115,7 +182,7 @@ export class CampaignsService {
       .findOne({ where: { id: staffId }, select: { name: true, email: true } });
     if (!staff?.email)
       throw new BadRequestException('Your account has no email address');
-    const edition = await this.editions.card(campaign.editionId);
+    const edition = await this.editions.findById(campaign.editionId);
     const sample: CampaignRecipient = {
       email: staff.email,
       name: staff.name,
@@ -127,6 +194,8 @@ export class CampaignsService {
       sample,
       edition.name,
       this.links.pageUrl(staff.email),
+      null,
+      await campaignImages(campaign, this.tracking, this.storage),
     );
     await this.email
       .send(staff.email, `[Test] ${mail.subject}`, mail.text, mail.html)
@@ -276,10 +345,24 @@ export class CampaignsService {
       body: dto.body,
       buttonLabel: label,
       buttonUrl: url,
+      design: dto.design === undefined ? undefined : this.design(dto.design),
       audience: {
         kind: dto.audience.kind,
         ticketTypeIds: [...new Set(dto.audience.ticketTypeIds)],
       },
+    };
+  }
+
+  private design(dto: CampaignDesignDto | null): CampaignDesign | null {
+    if (!dto) return null;
+    return {
+      logo: dto.logo || null,
+      banner: dto.banner || null,
+      headerColor: dto.headerColor.toLowerCase(),
+      buttonColor: dto.buttonColor.toLowerCase(),
+      eyebrow: dto.eyebrow.trim(),
+      showEventName: dto.showEventName,
+      footer: dto.footer.trim(),
     };
   }
 

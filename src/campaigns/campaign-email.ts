@@ -26,6 +26,64 @@ export interface CampaignContent {
   body: string;
   buttonLabel: string | null;
   buttonUrl: string | null;
+  /** How it looks; null is the PIC layout (navy header, no pictures). */
+  design?: CampaignDesign | null;
+}
+
+/**
+ * The look of a campaign email, set per campaign (a new one starts from the
+ * event's branding). Pictures are storage keys; the email links them through
+ * the API, which signs a fresh read each time a mail app fetches one.
+ */
+export interface CampaignDesign {
+  /** Shown at the top of the header. */
+  logo: string | null;
+  /** A full-width picture under the header, such as the event flyer. */
+  banner: string | null;
+  /** #rrggbb */
+  headerColor: string;
+  /** #rrggbb */
+  buttonColor: string;
+  /** The small line above the event name; empty hides it. */
+  eyebrow: string;
+  showEventName: boolean;
+  /** A line above the legal footer (contacts, sponsors); empty for none. */
+  footer: string;
+}
+
+export const PIC_NAVY = '#002d74';
+
+export const DEFAULT_DESIGN: CampaignDesign = {
+  logo: null,
+  banner: null,
+  headerColor: PIC_NAVY,
+  buttonColor: PIC_NAVY,
+  eyebrow: 'Policy Innovation Centre',
+  showEventName: true,
+  footer: '',
+};
+
+/** Where the design's pictures load from in this email; null leaves that picture out. */
+export interface CampaignImages {
+  logo: string | null;
+  banner: string | null;
+}
+
+const NO_IMAGES: CampaignImages = { logo: null, banner: null };
+
+/** Light text on a dark colour, dark text on a light one (WCAG relative luminance). */
+export function readsLight(hex: string): boolean {
+  const n = parseInt(hex.slice(1), 16);
+  const lin = (c: number) => {
+    const v = c / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const l =
+    0.2126 * lin((n >> 16) & 255) +
+    0.7152 * lin((n >> 8) & 255) +
+    0.0722 * lin(n & 255);
+  // white wins when it contrasts better than near-black
+  return 1.05 / (l + 0.05) >= (l + 0.05) / 0.05;
 }
 
 const FIELD = /\{\{\s*([a-z_]+)\s*\}\}/gi;
@@ -135,7 +193,9 @@ export function renderCampaign(
   event: string,
   unsubscribeUrl: string | null = null,
   track: EmailTracking | null = null,
+  images: CampaignImages = NO_IMAGES,
 ): RenderedEmail {
+  const d = c.design ?? DEFAULT_DESIGN;
   const subject = merge(c.subject, r, event).replace(/\s+/g, ' ').trim();
   const body = merge(c.body, r, event);
   const label = c.buttonLabel ? merge(c.buttonLabel, r, event) : null;
@@ -145,6 +205,7 @@ export function renderCampaign(
   const text = [
     body.trim(),
     label && url ? `${label}: ${url}` : null,
+    d.footer.trim() || null,
     `--\n${why}\nPolicy Innovation Centre${unsubscribeUrl ? `\nUnsubscribe from event emails: ${unsubscribeUrl}` : ''}`,
   ]
     .filter(Boolean)
@@ -152,16 +213,38 @@ export function renderCampaign(
 
   const button =
     label && url
-      ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 8px"><tr><td style="background:#002d74;border-radius:8px"><a href="${escapeHtml(track ? track.link(url) : url)}" style="display:inline-block;padding:12px 24px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none">${escapeHtml(label)}</a></td></tr></table>`
+      ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 8px"><tr><td style="background:${d.buttonColor};border-radius:8px"><a href="${escapeHtml(track ? track.link(url) : url)}" style="display:inline-block;padding:12px 24px;font-size:15px;font-weight:600;color:${readsLight(d.buttonColor) ? '#ffffff' : '#111111'};text-decoration:none">${escapeHtml(label)}</a></td></tr></table>`
       : '';
+
+  const light = readsLight(d.headerColor);
+  const eyebrow = d.eyebrow.trim();
+  const header = [
+    images.logo
+      ? `<img src="${escapeHtml(images.logo)}" alt="" height="44" style="display:block;height:44px;max-width:220px;border:0${eyebrow || d.showEventName ? ';margin:0 0 12px' : ''}">`
+      : '',
+    eyebrow
+      ? `<p style="margin:0;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:${light ? '#f2b705' : '#5c5c5c'}">${escapeHtml(eyebrow)}</p>`
+      : '',
+    d.showEventName
+      ? `<p style="margin:${eyebrow ? '4px' : '0'} 0 0;font-size:20px;font-weight:600;color:${light ? '#ffffff' : '#111111'}">${escapeHtml(event)}</p>`
+      : '',
+  ].join('');
+  const headerRow = header
+    ? `<tr><td style="background:${d.headerColor};padding:20px 28px">${header}</td></tr>`
+    : '';
+  const bannerRow = images.banner
+    ? `<tr><td style="padding:0;line-height:0"><img src="${escapeHtml(images.banner)}" alt="" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0"></td></tr>`
+    : '';
+  const footer = d.footer.trim()
+    ? `${escapeHtml(d.footer.trim()).replace(/\n/g, '<br>')}<br><br>`
+    : '';
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head>
 <body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden">
-<tr><td style="background:#002d74;padding:20px 28px"><p style="margin:0;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:#f2b705">Policy Innovation Centre</p><p style="margin:4px 0 0;font-size:20px;font-weight:600;color:#ffffff">${escapeHtml(event)}</p></td></tr>
-<tr><td style="padding:28px 28px 12px">${bodyHtml(body, track)}${button}</td></tr>
-<tr><td style="padding:16px 28px 24px;border-top:1px solid #ececec"><p style="margin:0;font-size:12px;line-height:18px;color:#7c7c7c">${escapeHtml(why)}<br>Policy Innovation Centre${unsubscribeUrl ? ` · <a href="${escapeHtml(unsubscribeUrl)}" style="color:#7c7c7c;text-decoration:underline">Unsubscribe from event emails</a>` : ''}</p></td></tr>
+${headerRow}${bannerRow}<tr><td style="padding:28px 28px 12px">${bodyHtml(body, track)}${button}</td></tr>
+<tr><td style="padding:16px 28px 24px;border-top:1px solid #ececec"><p style="margin:0;font-size:12px;line-height:18px;color:#7c7c7c">${footer}${escapeHtml(why)}<br>Policy Innovation Centre${unsubscribeUrl ? ` · <a href="${escapeHtml(unsubscribeUrl)}" style="color:#7c7c7c;text-decoration:underline">Unsubscribe from event emails</a>` : ''}</p></td></tr>
 </table></td></tr></table>${track ? `<img src="${escapeHtml(track.pixel)}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px">` : ''}</body></html>`;
 
   return { subject, text, html };

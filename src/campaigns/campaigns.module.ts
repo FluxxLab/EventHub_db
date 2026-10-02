@@ -1,6 +1,7 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { StorageService } from '../common/storage/storage.service';
 import { EditionsModule } from '../editions/editions.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { CampaignsController } from './campaigns.controller';
@@ -36,6 +37,7 @@ import { UnsubscribeLinks } from './unsubscribe-links';
     UnsubscribeLinks,
     TrackingLinks,
     CampaignTracking,
+    StorageService,
   ],
 })
 export class CampaignsModule {}
