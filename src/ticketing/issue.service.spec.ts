@@ -107,7 +107,9 @@ function setup(
     ),
   } as unknown as DataSource;
   const editions = {
-    card: jest.fn().mockResolvedValue({ id: EDITION, name: 'GS-27 Summit' }),
+    findById: jest
+      .fn()
+      .mockResolvedValue({ id: EDITION, name: 'GS-27 Summit' }),
   } as unknown as EditionsService;
   const send = jest.fn().mockResolvedValue(undefined);
   const email: EmailSender = { send };

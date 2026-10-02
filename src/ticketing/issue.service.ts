@@ -65,7 +65,7 @@ export class IssueService {
     staffId: string,
     dto: IssueTicketsDto,
   ): Promise<IssueResult> {
-    const edition = await this.editions.card(editionId);
+    const edition = await this.editions.findById(editionId);
     const skipped: IssueResult['skipped'] = [];
 
     // one ticket per person in the request
