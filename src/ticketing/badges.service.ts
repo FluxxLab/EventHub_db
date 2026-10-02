@@ -44,7 +44,7 @@ export class BadgesService {
   ) {}
 
   async design(editionId: string): Promise<BadgeDesignView | null> {
-    await this.editions.card(editionId);
+    await this.editions.findById(editionId);
     const row = await this.dataSource.getRepository(Edition).findOne({
       where: { id: editionId },
       select: { id: true, badgeDesign: true },
@@ -72,7 +72,7 @@ export class BadgesService {
     editionId: string,
     dto: SaveBadgeDesignDto,
   ): Promise<BadgeDesignView> {
-    await this.editions.card(editionId);
+    await this.editions.findById(editionId);
     if (dto.artwork && !dto.layout) {
       throw new BadRequestException(
         'Say where the photo, name and QR go on the artwork',
@@ -109,7 +109,7 @@ export class BadgesService {
     editionId: string,
     ticketTypeId?: string,
   ): Promise<BadgeHolder[]> {
-    await this.editions.card(editionId);
+    await this.editions.findById(editionId);
     const qb = this.dataSource
       .createQueryBuilder()
       .select('t.id', 'ticketId')

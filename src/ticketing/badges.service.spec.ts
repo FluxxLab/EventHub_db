@@ -36,7 +36,7 @@ function setup(
     getRepository: jest.fn().mockReturnValue(repo),
   } as unknown as DataSource;
   const editions = {
-    card: jest
+    findById: jest
       .fn()
       .mockImplementation(() =>
         opts.missing
