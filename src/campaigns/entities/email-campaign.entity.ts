@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { CampaignDesign } from '../campaign-email';
 
 /** Who a campaign goes to: an edition's ticket holders, narrowed by door status and tier. */
 export interface CampaignAudience {
@@ -47,6 +48,10 @@ export class EmailCampaign {
 
   @Column({ type: 'jsonb' })
   audience: CampaignAudience;
+
+  /** Logo, banner, colours and header and footer text; null is the PIC layout. */
+  @Column({ type: 'jsonb', nullable: true })
+  design: CampaignDesign | null;
 
   @Column({ type: 'varchar', length: 10, default: 'draft' })
   status: CampaignStatus;

@@ -18,7 +18,11 @@ import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 import { AccessTier } from '../delegate/entities/delegate.entity';
 import { CampaignTracking } from './campaign-tracking.service';
 import { CampaignsService } from './campaigns.service';
-import { AudienceSizeDto, SaveCampaignDto } from './dto/campaign.dto';
+import {
+  AudienceSizeDto,
+  CampaignImageUploadDto,
+  SaveCampaignDto,
+} from './dto/campaign.dto';
 
 /** Email campaigns to an edition's ticket holders, for admins and that edition's organisers. */
 @ApiTags('campaigns')
@@ -57,6 +61,32 @@ export class CampaignsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.campaigns.create(id, user.id, dto);
+  }
+
+  @Get('editions/:id/campaigns/design-default')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      "A new campaign's design: the event's logo, cover and brand colour, with the pictures signed for a preview",
+  })
+  designDefault(@Param('id', ParseUUIDPipe) id: string) {
+    return this.campaigns.designDefault(id);
+  }
+
+  @Post('editions/:id/campaigns/upload-url')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      'Signed URL for a campaign logo or banner (PNG, JPG or GIF): PUT the file, then save the key in the design',
+  })
+  imageUploadUrl(
+    @Param('id', ParseUUIDPipe) _id: string,
+    @Body() dto: CampaignImageUploadDto,
+  ) {
+    return this.campaigns.presignImage(dto.contentType);
   }
 
   @Post('editions/:id/campaigns/audience-size')

@@ -3,10 +3,12 @@ import { Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job, Queue } from 'bullmq';
 import { Repository } from 'typeorm';
+import { StorageService } from '../common/storage/storage.service';
 import { EditionsService } from '../editions/editions.service';
 import type { EmailSender } from '../notifications/email/email-sender.interface';
 import { EMAIL_SENDER } from '../notifications/email/email-sender.interface';
 import { renderCampaign } from './campaign-email';
+import { campaignImages } from './campaign-images';
 import { CAMPAIGNS_QUEUE, type CampaignJob } from './campaigns.service';
 import { CampaignRecipientRow } from './entities/campaign-recipient.entity';
 import { TrackingLinks } from './tracking-links';
@@ -38,6 +40,7 @@ export class CampaignsProcessor extends WorkerHost {
     private readonly queue: Queue<CampaignJob>,
     private readonly links: UnsubscribeLinks,
     private readonly tracking: TrackingLinks,
+    private readonly storage: StorageService,
   ) {
     super();
   }
@@ -50,6 +53,7 @@ export class CampaignsProcessor extends WorkerHost {
       .card(campaign.editionId)
       .catch(() => null);
     const event = edition?.name ?? 'PIC Events';
+    const images = await campaignImages(campaign, this.tracking, this.storage);
 
     const rows = await this.recipients.find({
       where: { campaignId, status: 'pending' },
@@ -68,6 +72,7 @@ export class CampaignsProcessor extends WorkerHost {
               link: (url) => this.tracking.clickUrl(row.id, url),
             }
           : null,
+        images,
       );
       try {
         await this.email.send(

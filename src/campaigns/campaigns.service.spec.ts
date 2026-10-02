@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type { DataSource, Repository } from 'typeorm';
+import type { StorageService } from '../common/storage/storage.service';
 import type { EditionsService } from '../editions/editions.service';
 import type { EmailSender } from '../notifications/email/email-sender.interface';
 import { CampaignsService, type CampaignJob } from './campaigns.service';
@@ -72,6 +73,13 @@ function setup(
   } as unknown as DataSource;
   const editions = {
     card: jest.fn().mockResolvedValue({ id: EDITION, name: 'GS-27 Summit' }),
+    findById: jest.fn().mockResolvedValue({
+      id: EDITION,
+      name: 'GS-27 Summit',
+      logoImage: null,
+      coverImage: null,
+      brandColor: null,
+    }),
   } as unknown as EditionsService;
   const send = jest.fn().mockResolvedValue(undefined);
   const email: EmailSender = { send };
@@ -93,7 +101,19 @@ function setup(
       email,
       queue,
       links,
-      { enabled: jest.fn().mockReturnValue(true) } as unknown as TrackingLinks,
+      {
+        enabled: jest.fn().mockReturnValue(true),
+        apiUrl: jest.fn().mockReturnValue('https://api.pic.org/api/v1'),
+      } as unknown as TrackingLinks,
+      {
+        resolveStoredUrl: jest.fn((k: string | null) =>
+          Promise.resolve(k ? `https://signed/${k}` : null),
+        ),
+        presignRead: jest.fn((k: string) =>
+          Promise.resolve(`https://signed/${k}`),
+        ),
+        presignUpload: jest.fn(),
+      } as unknown as StorageService,
     ),
     dataSource,
     inserted,
