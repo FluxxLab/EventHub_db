@@ -153,6 +153,7 @@ export class NotificationsProcessor extends WorkerHost {
     const delegateIds = await this.delegate.idsForSegment(
       notification.segment,
       notification.editionId,
+      notification.ticketTypeIds ?? [],
     );
     if (notification.whatsapp)
       await this.queueWhatsApp(notification, delegateIds);

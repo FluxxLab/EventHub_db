@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ConflictException,
+  NotFoundException,
   Inject,
   Injectable,
   Logger,
@@ -59,6 +61,73 @@ export class IssueService {
     @Inject(EMAIL_SENDER)
     private readonly email: EmailSender,
   ) {}
+
+  /**
+   * Moves a ticket to another tier of its event, as an organiser does from
+   * the delegates list. The tiers' counts move with it, and the new tier must
+   * have room. Its door QR stays valid: the QR names the ticket, and the gate
+   * reads the tier from the ticket when it is scanned. A printed badge shows
+   * the old tier until it is printed again.
+   */
+  async changeTier(
+    ticketId: string,
+    ticketTypeId: string,
+  ): Promise<{
+    ticketId: string;
+    ticketTypeId: string;
+    tierName: string;
+    section: string;
+  }> {
+    return this.dataSource.transaction(async (m) => {
+      const ticket = await m.findOne(Ticket, {
+        where: { id: ticketId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!ticket) throw new NotFoundException('Ticket not found');
+      const done = {
+        ticketId: ticket.id,
+        ticketTypeId: ticket.ticketTypeId,
+        tierName: ticket.tierName,
+        section: ticket.section,
+      };
+      if (ticket.ticketTypeId === ticketTypeId) return done;
+
+      const types = await m.find(TicketType, {
+        where: { id: In([ticket.ticketTypeId, ticketTypeId]) },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const to = types.find((t) => t.id === ticketTypeId);
+      const from = types.find((t) => t.id === ticket.ticketTypeId);
+      if (!to || to.editionId !== ticket.editionId) {
+        throw new BadRequestException(
+          "That tier is not one of this event's. Refresh and choose again.",
+        );
+      }
+      const seats = ticket.quantity ?? 1;
+      if (to.capacity !== null && to.sold + seats > to.capacity) {
+        throw new ConflictException(
+          `${to.name} is full: ${to.sold} of ${to.capacity} taken. Raise its capacity in Ticketing first.`,
+        );
+      }
+      if (from) {
+        from.sold = Math.max(0, from.sold - seats);
+        await m.save(from);
+      }
+      to.sold += seats;
+      await m.save(to);
+      await m.update(Ticket, ticket.id, {
+        ticketTypeId: to.id,
+        tierName: to.name,
+        section: to.section,
+      });
+      return {
+        ticketId: ticket.id,
+        ticketTypeId: to.id,
+        tierName: to.name,
+        section: to.section,
+      };
+    });
+  }
 
   async issue(
     editionId: string,

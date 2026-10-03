@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEnum,
   IsOptional,
@@ -56,6 +58,14 @@ export class CreateNotificationDto {
   @IsOptional()
   @IsBoolean()
   whatsapp?: boolean;
+
+  /** Only holders of these ticket tiers of `editionId`; left out or empty, everyone at the event. */
+  @ApiPropertyOptional({ type: [String], format: 'uuid' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsUUID('all', { each: true })
+  ticketTypeIds?: string[];
 
   /** The event it is for. Defaults to the current one; event organisers must name one of theirs. */
   @ApiPropertyOptional({ format: 'uuid' })

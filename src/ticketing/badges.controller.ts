@@ -5,6 +5,7 @@ import {
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -22,6 +23,7 @@ import {
   BadgeListQueryDto,
   SaveBadgeDesignDto,
 } from './dto/badge.dto';
+import { ChangeTicketTierDto } from './dto/change-tier.dto';
 import { IssueTicketsDto } from './dto/issue.dto';
 import { IssueService } from './issue.service';
 
@@ -51,6 +53,24 @@ export class BadgesController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.issuer.issue(id, user.id, dto);
+  }
+
+  @Patch('tickets/:id/ticket-type')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'ticket' })
+  @Audit({
+    type: 'ticket_tier_changed',
+    description: 'Ticket moved to another tier of its event',
+  })
+  @ApiOperation({
+    summary:
+      "Move a ticket to another tier of its event; the tiers' counts follow and its QR stays valid",
+  })
+  changeTier(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeTicketTierDto,
+  ) {
+    return this.issuer.changeTier(id, dto.ticketTypeId);
   }
 
   @Get('editions/:id/badge-design')

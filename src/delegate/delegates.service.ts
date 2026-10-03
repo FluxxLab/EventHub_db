@@ -218,9 +218,16 @@ export class DelegatesService {
   async idsForSegment(
     segment: string,
     editionId?: string | null,
+    ticketTypeIds: string[] = [],
   ): Promise<string[]> {
     const qb = this.delegateRepository.createQueryBuilder('d').select(['d.id']);
-    if (editionId) {
+    if (editionId && ticketTypeIds.length) {
+      // only holders of those tiers' tickets, not everyone connected to the event
+      qb.andWhere(
+        `d.id IN (SELECT t."delegateId" FROM tickets t WHERE t."editionId" = :editionId AND t."ticketTypeId" IN (:...ticketTypeIds))`,
+        { editionId, ticketTypeIds },
+      );
+    } else if (editionId) {
       qb.andWhere(
         `d.id IN (SELECT a."delegateId" FROM (${editionAudienceSql('= :editionId')}) a)`,
         { editionId },
@@ -641,17 +648,23 @@ export class DelegatesService {
     return d?.tags ?? [];
   }
 
-  listDelegates(q: {
+  /**
+   * The console's delegates list. Each row carries the person's tickets (with
+   * an edition, that event's only), so the console shows and changes their
+   * ticket tier rather than the old account tier.
+   */
+  async listDelegates(q: {
     search?: string;
     tier?: AccessTier;
     track?: string;
     editionId?: string;
+    ticketTypeId?: string;
   }) {
     const qb = this.delegateRepository.createQueryBuilder('d');
     if (q.editionId) {
       qb.andWhere(
-        'd.id IN (SELECT t."delegateId" FROM tickets t WHERE t."editionId" = :editionId)',
-        { editionId: q.editionId },
+        `d.id IN (SELECT t."delegateId" FROM tickets t WHERE t."editionId" = :editionId${q.ticketTypeId ? ' AND t."ticketTypeId" = :ticketTypeId' : ''})`,
+        { editionId: q.editionId, ticketTypeId: q.ticketTypeId },
       );
     }
     if (q.tier) qb.andWhere('d.accessTier = :tier', { tier: q.tier });
@@ -664,7 +677,33 @@ export class DelegatesService {
       );
     }
     if (q.track) qb.andWhere(':track = ANY(d.tracks)', { track: q.track });
-    return qb.orderBy('d.createdAt', 'DESC').take(500).getMany();
+    const rows = await qb.orderBy('d.createdAt', 'DESC').take(500).getMany();
+    if (rows.length === 0) return [];
+    const tickets = await this.delegateRepository.query<
+      {
+        delegateId: string;
+        ticketId: string;
+        editionId: string;
+        ticketTypeId: string;
+        tierName: string;
+      }[]
+    >(
+      `SELECT t."delegateId", t.id AS "ticketId", t."editionId", t."ticketTypeId", t."tierName"
+       FROM tickets t
+       WHERE t."delegateId" = ANY($1::uuid[])${q.editionId ? ' AND t."editionId" = $2' : ''}
+       ORDER BY t."createdAt"`,
+      q.editionId
+        ? [rows.map((r) => r.id), q.editionId]
+        : [rows.map((r) => r.id)],
+    );
+    const byPerson = new Map<
+      string,
+      Omit<(typeof tickets)[number], 'delegateId'>[]
+    >();
+    for (const { delegateId, ...t } of tickets) {
+      byPerson.set(delegateId, [...(byPerson.get(delegateId) ?? []), t]);
+    }
+    return rows.map((r) => ({ ...r, tickets: byPerson.get(r.id) ?? [] }));
   }
 
   /**

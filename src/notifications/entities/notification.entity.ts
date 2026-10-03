@@ -67,6 +67,13 @@ export class Notification {
   @Column({ type: 'boolean', default: false })
   whatsapp: boolean;
 
+  /**
+   * Only holders of these ticket tiers of the event (its Ticketing tiers);
+   * empty is everyone at the event. Always empty without an event.
+   */
+  @Column({ type: 'uuid', array: true, default: () => "'{}'" })
+  ticketTypeIds: string[];
+
   /** The event it belongs to; null only for rows made before events were linked (25 Sep 2026). */
   @Index()
   @Column({ type: 'uuid', nullable: true })

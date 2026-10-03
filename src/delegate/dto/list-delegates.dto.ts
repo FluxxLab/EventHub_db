@@ -13,6 +13,12 @@ export class ListDelegatesDto {
   @IsEnum(AccessTier)
   tier?: AccessTier;
 
+  /** Only holders of this ticket tier (of `editionId`). */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  ticketTypeId?: string;
+
   /** Only people holding a ticket for this edition. Required of event organisers. */
   @ApiPropertyOptional({ format: 'uuid' })
   @IsOptional()
