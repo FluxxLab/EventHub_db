@@ -18,6 +18,7 @@ export type EditionVia =
   | 'room'
   | 'booth'
   | 'ticketType'
+  | 'ticket'
   | 'review'
   | 'ticketCode'
   | 'trivia'

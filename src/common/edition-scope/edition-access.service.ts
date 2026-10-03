@@ -24,6 +24,7 @@ const EDITION_OF: Record<
   room: `SELECT "editionId" FROM edition_rooms WHERE id = $1`,
   booth: `SELECT "editionId" FROM booths WHERE id = $1`,
   ticketType: `SELECT "editionId" FROM ticket_types WHERE id = $1`,
+  ticket: `SELECT "editionId" FROM tickets WHERE id = $1`,
   review: `SELECT "editionId" FROM event_reviews WHERE id = $1`,
   trivia: `SELECT "editionId" FROM trivia_questions WHERE id = $1`,
   pitchTopic: `SELECT "editionId" FROM pitch_topics WHERE id = $1`,

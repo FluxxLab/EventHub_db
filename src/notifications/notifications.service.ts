@@ -1,12 +1,13 @@
 import { EditionAccessService } from '../common/edition-scope/edition-access.service';
 import {
+  BadRequestException,
   Inject,
   Injectable,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Raw, Repository } from 'typeorm';
 import { DeviceToken } from './entities/device-token.entity';
 import { InjectQueue } from '@nestjs/bullmq';
 import { RealtimeService } from '../common/realtime/realtime.service';
@@ -50,16 +51,39 @@ export class NotificationsService {
   async whatsappReach(
     segment: string,
     editionId: string | null,
+    ticketTypeIds: string[] = [],
   ): Promise<{ recipients: number; live: boolean }> {
-    const ids = await this.delegates.idsForSegment(segment, editionId);
+    const ids = await this.delegates.idsForSegment(
+      segment,
+      editionId,
+      editionId ? ticketTypeIds : [],
+    );
     const contacts = await this.delegates.whatsappContacts(ids);
     return { recipients: contacts.length, live: this.whatsapp?.live ?? false };
   }
 
   async announce(dto: CreateNotificationDto): Promise<Notification> {
+    const ticketTypeIds = [...new Set(dto.ticketTypeIds ?? [])];
+    if (ticketTypeIds.length) {
+      if (!dto.editionId) {
+        throw new BadRequestException(
+          'Ticket tiers belong to an event: choose the event to send to',
+        );
+      }
+      const known = await this.notifications.query<{ id: string }[]>(
+        `SELECT id FROM ticket_types WHERE "editionId" = $1 AND id = ANY($2::uuid[])`,
+        [dto.editionId, ticketTypeIds],
+      );
+      if (known.length !== ticketTypeIds.length) {
+        throw new BadRequestException(
+          "Those ticket tiers are not this event's. Refresh and choose again.",
+        );
+      }
+    }
     const notification = await this.notifications.save(
       this.notifications.create({
         ...dto,
+        ticketTypeIds,
         // the composer sends '' for a target the operator left alone
         sessionId: dto.sessionId?.trim() ? dto.sessionId.trim() : null,
         linkUrl: dto.linkUrl?.trim() ? dto.linkUrl.trim() : null,
@@ -127,10 +151,24 @@ export class NotificationsService {
         : user.role === AccessTier.EVENT_ADMIN
           ? ((await this.access?.editionsOf(user.id)) ?? [])
           : await this.editionsOf(user.id);
+    // staff see every announcement; a delegate the untargeted ones, and those
+    // for ticket tiers they hold, so the inbox matches who got the push
+    const tiers = staff ? null : await this.ticketTypesOf(user.id);
     const broadcast = {
       segment: In(segments),
       sentAt: Not(IsNull()),
       delegateId: IsNull(),
+      ...(tiers
+        ? {
+            ticketTypeIds: Raw(
+              (column) =>
+                tiers.length
+                  ? `(cardinality(${column}) = 0 OR ${column} && ARRAY[:...holderTiers]::uuid[])`
+                  : `cardinality(${column}) = 0`,
+              tiers.length ? { holderTiers: tiers } : {},
+            ),
+          }
+        : {}),
     };
 
     const rows = await this.notifications.find({
@@ -155,6 +193,15 @@ export class NotificationsService {
     });
     const read = new Set(reads.map((r) => r.notificationId));
     return rows.map((r) => ({ ...r, read: read.has(r.id) }));
+  }
+
+  /** The ticket tiers a delegate holds, at any event. */
+  private async ticketTypesOf(delegateId: string): Promise<string[]> {
+    const rows = await this.notifications.query<{ ticketTypeId: string }[]>(
+      `SELECT DISTINCT t."ticketTypeId" FROM tickets t WHERE t."delegateId" = $1`,
+      [delegateId],
+    );
+    return rows.map((r) => r.ticketTypeId);
   }
 
   /**

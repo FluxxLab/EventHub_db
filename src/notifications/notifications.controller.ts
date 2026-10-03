@@ -15,6 +15,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { isUUID } from 'class-validator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import type { AuthUser } from '../auth/strategies/jwt.stategies';
@@ -56,8 +57,14 @@ export class NotificationsController {
   whatsappReach(
     @Query('segment') segment = 'all',
     @Query('editionId') editionId?: string,
+    /** Comma-separated ticket tier ids of the event; empty is everyone at it. */
+    @Query('ticketTypeIds') ticketTypeIds?: string,
   ) {
-    return this.service.whatsappReach(segment, editionId || null);
+    const tiers = (ticketTypeIds ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => isUUID(t));
+    return this.service.whatsappReach(segment, editionId || null, tiers);
   }
 
   @Post()
