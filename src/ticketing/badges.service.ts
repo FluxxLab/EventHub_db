@@ -6,6 +6,7 @@ import { EditionsService } from '../editions/editions.service';
 import { AdmissionService } from './admission.service';
 import {
   BADGE_LIST_LIMIT,
+  BADGE_LOOK_DEFAULTS,
   type BadgeDesign,
   type BadgeDesignView,
   type BadgeHolder,
@@ -52,14 +53,26 @@ export class BadgesService {
     return row?.badgeDesign ? this.view(row.badgeDesign) : null;
   }
 
-  /** Designs saved before artwork existed have neither field; the link to show the artwork is fresh each read. */
+  /**
+   * Designs saved before artwork, logos and colours existed lack those
+   * fields; they read as they always printed. The links to show the artwork
+   * and an uploaded logo are fresh each read.
+   */
   private async view(design: BadgeDesign): Promise<BadgeDesignView> {
-    const artwork = design.artwork ?? null;
+    const full = { ...BADGE_LOOK_DEFAULTS, ...design };
+    const artwork = full.artwork ?? null;
+    const logoKey = full.logo === 'custom' ? full.logoKey : null;
+    const [artworkUrl, logoUrl] = await Promise.all([
+      artwork ? this.storage.presignRead(artwork) : null,
+      logoKey ? this.storage.presignRead(logoKey) : null,
+    ]);
     return {
-      ...design,
+      ...full,
       artwork,
-      layout: design.layout ?? null,
-      artworkUrl: artwork ? await this.storage.presignRead(artwork) : null,
+      layout: full.layout ?? null,
+      logoKey,
+      artworkUrl,
+      logoUrl,
     };
   }
 
@@ -78,6 +91,10 @@ export class BadgesService {
         'Say where the photo, name and QR go on the artwork',
       );
     }
+    const logo = dto.logo ?? BADGE_LOOK_DEFAULTS.logo;
+    if (logo === 'custom' && !dto.logoKey) {
+      throw new BadRequestException('Upload the logo to print on the badges');
+    }
     const design: BadgeDesign = {
       size: dto.size,
       accent: dto.accent.toLowerCase(),
@@ -93,6 +110,13 @@ export class BadgesService {
       ],
       artwork: dto.artwork ?? null,
       layout: dto.artwork && dto.layout ? dto.layout : null,
+      logo,
+      logoKey: logo === 'custom' ? (dto.logoKey ?? null) : null,
+      heading: dto.heading === undefined ? null : (dto.heading?.trim() ?? null),
+      headerStyle: dto.headerStyle ?? BADGE_LOOK_DEFAULTS.headerStyle,
+      background: (
+        dto.background ?? BADGE_LOOK_DEFAULTS.background
+      ).toLowerCase(),
     };
     await this.dataSource
       .getRepository(Edition)

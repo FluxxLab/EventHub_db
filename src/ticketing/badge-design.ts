@@ -35,6 +35,14 @@ export interface BadgePlacement {
 /** Artwork images the console may upload. */
 export const BADGE_ARTWORK_TYPES = ['image/png', 'image/jpeg'] as const;
 
+/** Whose logo the header carries: the event's (Events > Branding), PIC's, one uploaded for badges, or none. */
+export const BADGE_LOGOS = ['event', 'pic', 'custom', 'none'] as const;
+export type BadgeLogo = (typeof BADGE_LOGOS)[number];
+
+/** A coloured header band, or a light header with a coloured rule under it. */
+export const BADGE_HEADER_STYLES = ['band', 'light'] as const;
+export type BadgeHeaderStyle = (typeof BADGE_HEADER_STYLES)[number];
+
 export interface BadgeDesign {
   size: BadgeSize;
   /** The header band, as #rrggbb. */
@@ -50,10 +58,38 @@ export interface BadgeDesign {
   artwork: string | null;
   /** Where each part sits on the artwork; null without artwork. */
   layout: Record<BadgePart, BadgePlacement> | null;
+  /** Whose logo the header carries. */
+  logo: BadgeLogo;
+  /** The storage key of a logo uploaded for badges; set only with `logo: 'custom'`. */
+  logoKey: string | null;
+  /** The header's words; null is the event's short name, empty hides them. */
+  heading: string | null;
+  headerStyle: BadgeHeaderStyle;
+  /** The card behind the name, as #rrggbb; the text picks white or ink to read on it. */
+  background: string;
 }
 
-/** The design as the console reads it: with a short-lived link to show and print the artwork. */
-export type BadgeDesignView = BadgeDesign & { artworkUrl: string | null };
+/**
+ * What a design saved before these existed looks like: PIC's logo on a band
+ * of the accent, the event's short name, a white card. So older badges print
+ * exactly as they did.
+ */
+export const BADGE_LOOK_DEFAULTS: Pick<
+  BadgeDesign,
+  'logo' | 'logoKey' | 'heading' | 'headerStyle' | 'background'
+> = {
+  logo: 'pic',
+  logoKey: null,
+  heading: null,
+  headerStyle: 'band',
+  background: '#ffffff',
+};
+
+/** The design as the console reads it: with short-lived links to show and print the artwork and an uploaded logo. */
+export type BadgeDesignView = BadgeDesign & {
+  artworkUrl: string | null;
+  logoUrl: string | null;
+};
 
 /** A holder's badge: what is printed, and the door QR. */
 export interface BadgeHolder {

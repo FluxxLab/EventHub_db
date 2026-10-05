@@ -132,12 +132,53 @@ describe('BadgesService', () => {
       tierColours: [{ tier: 'VIP', colour: '#b8860b' }],
       artwork: null,
       layout: null,
+      // left out: the look older designs had
+      logo: 'pic',
+      logoKey: null,
+      heading: null,
+      headerStyle: 'band',
+      background: '#ffffff',
     };
-    expect(saved).toEqual({ ...stored, artworkUrl: null });
+    expect(saved).toEqual({ ...stored, artworkUrl: null, logoUrl: null });
     expect(repo.update).toHaveBeenCalledWith(
       { id: EDITION_ID },
       { badgeDesign: stored },
     );
+  });
+
+  it('keeps the look: logo, header and background, and links to an uploaded logo', async () => {
+    const { service } = setup();
+    const key = 'badges/1b8f7d1e-4a3c-4e4f-9a51-6c2d9e1f0a12';
+    const base = {
+      size: 'a6' as const,
+      accent: '#0F6B3A',
+      fields: [],
+      tierColours: [],
+    };
+    await expect(
+      service.saveDesign(EDITION_ID, { ...base, logo: 'custom' }),
+    ).rejects.toThrow('Upload the logo');
+    await expect(
+      service.saveDesign(EDITION_ID, {
+        ...base,
+        logo: 'custom',
+        logoKey: key,
+        heading: '  Build 2026 ',
+        headerStyle: 'light',
+        background: '#FFF8E7',
+      }),
+    ).resolves.toMatchObject({
+      logo: 'custom',
+      logoKey: key,
+      logoUrl: `https://signed/${key}`,
+      heading: 'Build 2026',
+      headerStyle: 'light',
+      background: '#fff8e7',
+    });
+    // the event's logo needs no key, and a stray one is dropped
+    await expect(
+      service.saveDesign(EDITION_ID, { ...base, logo: 'event', logoKey: key }),
+    ).resolves.toMatchObject({ logo: 'event', logoKey: null, logoUrl: null });
   });
 
   it('keeps artwork with where the parts go, and links to it when read', async () => {
