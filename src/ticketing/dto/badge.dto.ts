@@ -19,6 +19,8 @@ import {
 import {
   BADGE_ARTWORK_TYPES,
   BADGE_FIELDS,
+  BADGE_HEADER_STYLES,
+  BADGE_LOGOS,
   BADGE_SIZES,
 } from '../badge-design';
 
@@ -118,6 +120,43 @@ export class SaveBadgeDesignDto {
   @ValidateNested()
   @Type(() => BadgeLayoutDto)
   layout?: BadgeLayoutDto | null;
+
+  @ApiPropertyOptional({ enum: BADGE_LOGOS, example: 'event' })
+  @IsOptional()
+  @IsIn(BADGE_LOGOS)
+  logo?: (typeof BADGE_LOGOS)[number];
+
+  @ApiPropertyOptional({
+    description:
+      "Storage key of a logo uploaded for badges (from the upload URL); with logo 'custom'",
+    nullable: true,
+  })
+  @IsOptional()
+  @Matches(/^badges\/[0-9a-f-]{36}$/, {
+    message: 'logoKey must be a key from the badge upload URL',
+  })
+  logoKey?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      "The header's words; null is the event's short name, empty hides them",
+    nullable: true,
+    example: 'GS-26 Summit',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  heading?: string | null;
+
+  @ApiPropertyOptional({ enum: BADGE_HEADER_STYLES, example: 'band' })
+  @IsOptional()
+  @IsIn(BADGE_HEADER_STYLES)
+  headerStyle?: (typeof BADGE_HEADER_STYLES)[number];
+
+  @ApiPropertyOptional({ example: '#ffffff' })
+  @IsOptional()
+  @Matches(HEX, { message: HEX_MESSAGE })
+  background?: string;
 }
 
 export class BadgeListQueryDto {
