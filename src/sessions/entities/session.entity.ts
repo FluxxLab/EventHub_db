@@ -46,6 +46,20 @@ export enum SessionStatus {
   COMPLETED = 'completed',
 }
 
+/**
+ * Who speaks into which microphone in this session, when the room's mics
+ * reach the captions one per channel. Mic numbers are the sound desk's
+ * channels as patched for the room; a mic carries one of the session's
+ * speakers, or a label of its own ("Audience", a guest not on the
+ * programme).
+ */
+export interface SessionMic {
+  /** 1-based, as the sound desk numbers its channels. */
+  mic: number;
+  speakerId: string | null;
+  label: string | null;
+}
+
 export interface SessionVideoLink {
   url: string;
   /** Shown above the player when a session has more than one. */
@@ -130,6 +144,10 @@ export class Session {
    */
   @Column({ type: 'jsonb', default: () => "'[]'" })
   videos: SessionVideoLink[];
+
+  /** Who is on which microphone; empty until the room's mics are named. */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  mics: SessionMic[];
 
   @ManyToMany(() => Speaker, { cascade: false })
   @JoinTable({ name: 'session_speakers' })

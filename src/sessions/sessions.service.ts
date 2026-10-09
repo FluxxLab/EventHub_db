@@ -1,5 +1,6 @@
 import { CatalogService } from '../catalog/catalog.service';
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -23,6 +24,7 @@ import {
   Session,
   SessionStatus,
   SessionTrack,
+  type SessionMic,
   type SessionVideoLink,
 } from './entities/session.entity';
 import { Speaker } from './entities/speaker.entity';
@@ -629,6 +631,38 @@ export class SessionsService implements OnApplicationBootstrap {
       );
     }
     return created;
+  }
+
+  /**
+   * Names the session's microphones. Each mic once; a speaker must be one of
+   * the session's own, and a mic with neither speaker nor label is left out.
+   */
+  async setMics(
+    id: string,
+    mics: { mic: number; speakerId?: string | null; label?: string | null }[],
+  ): Promise<SessionMic[]> {
+    const session = await this.findById(id);
+    const speakers = new Set((session.speakers ?? []).map((s) => s.id));
+    const seen = new Set<number>();
+    const next: SessionMic[] = [];
+    for (const m of mics) {
+      if (seen.has(m.mic)) {
+        throw new BadRequestException(`Mic ${m.mic} is listed twice`);
+      }
+      seen.add(m.mic);
+      const speakerId = m.speakerId ?? null;
+      if (speakerId && !speakers.has(speakerId)) {
+        throw new BadRequestException(
+          `Mic ${m.mic}: that speaker is not on this session. Add them to the session in Programme first.`,
+        );
+      }
+      const label = m.label?.trim() || null;
+      if (!speakerId && !label) continue;
+      next.push({ mic: m.mic, speakerId, label: speakerId ? null : label });
+    }
+    next.sort((a, b) => a.mic - b.mic);
+    await this.sessions.update(id, { mics: next });
+    return next;
   }
 
   async update(id: string, dto: UpdateSessionDto): Promise<Session> {

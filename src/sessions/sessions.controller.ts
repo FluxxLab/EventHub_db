@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   ParseArrayPipe,
 } from '@nestjs/common';
@@ -28,6 +29,7 @@ import { QualityQueryDto } from './dto/quality-query.dto';
 import { QuerySessionsDto } from './dto/query-sessions.dto';
 import { UpdateSessionDto } from './dto/update-session.dto';
 import { UpdateSessionStatusDto } from './dto/update-session-status.dto';
+import { SetSessionMicsDto } from './dto/set-session-mics.dto';
 import { SessionsService } from './sessions.service';
 import type { AuthUser } from '../auth/strategies/jwt.stategies';
 import { Audit } from '../common/decorators/audit.decorator';
@@ -156,6 +158,22 @@ export class SessionController {
     @Body() dto: UpdateSessionDto,
   ) {
     return this.service.update(id, dto);
+  }
+
+  @Put(':id/mics')
+  @ApiOperation({
+    summary:
+      "Who is on which microphone in the session: one of its speakers, or a label such as 'Audience'",
+  })
+  // session operators name the mics from the Captions page as panels change
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'session' })
+  @Audit({ type: 'session_mics_set', description: 'Session microphones named' })
+  setMics(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetSessionMicsDto,
+  ) {
+    return this.service.setMics(id, dto.mics);
   }
 
   @Patch(':id/status')
