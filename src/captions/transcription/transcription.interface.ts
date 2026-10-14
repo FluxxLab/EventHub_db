@@ -10,6 +10,11 @@ export interface TranscriptEvent {
    * time the stream reopens.
    */
   speaker?: number;
+  /**
+   * Which of a multichannel stream's channels this came from, 0-based: one mic
+   * per channel. Undefined for a single-channel stream.
+   */
+  channel?: number;
 }
 
 export interface TranscriptionStream {
@@ -26,7 +31,8 @@ export interface TranscriptionStream {
 export interface RawAudioFormat {
   encoding: 'linear16';
   sampleRate: number;
-  channels: 1;
+  /** 1 for a mixed feed; one per mic when the sound desk sends each mic on its own channel. */
+  channels: number;
 }
 
 /** One speaker turn from a finished recording. */

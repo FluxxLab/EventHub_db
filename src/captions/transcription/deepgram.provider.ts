@@ -213,6 +213,11 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
             channels: String(opts.audio.channels),
           }
         : {}),
+      // One mic per channel: Deepgram keeps the channels apart and says which
+      // each result came from.
+      ...(opts.audio && opts.audio.channels > 1
+        ? { multichannel: 'true' }
+        : {}),
       language: 'en',
       smart_format: 'true',
       interim_results: 'true',
@@ -226,7 +231,10 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
       // and returns a validation error here. Omitted entirely for a
       // single-voice room rather than set false, so no speaker field comes
       // back at all and the UI renders unlabelled lines.
-      ...(opts.diarise === false ? {} : { diarize_model: 'v1' }),
+      // Each mic already is one voice, so a multichannel stream is never diarised.
+      ...(opts.diarise === false || (opts.audio?.channels ?? 1) > 1
+        ? {}
+        : { diarize_model: 'v1' }),
       /**
        * Deepgram's default endpointing is 10ms, which finalises on the
        * shortest pause and produces fragments that end mid-phrase. That hurts
@@ -255,11 +263,21 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
       const alternative = message.channel?.alternatives?.[0];
       const text = alternative?.transcript;
       if (!text) return;
+      // which mic, when the stream carries one per channel
+      const channel =
+        (opts.audio?.channels ?? 1) > 1
+          ? (message as { channel_index?: number[] }).channel_index?.[0]
+          : undefined;
 
       const words = alternative?.words as DiarisedWord[] | undefined;
 
       if (message.is_final !== true) {
-        onTranscript({ text, isFinal: false, speaker: dominantSpeaker(words) });
+        onTranscript({
+          text,
+          isFinal: false,
+          speaker: dominantSpeaker(words),
+          channel,
+        });
         return;
       }
 
@@ -270,7 +288,12 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
             `Deepgram separating ${voicesHeard} voice(s) (${opts.room})`,
           );
         }
-        onTranscript({ text: run.text, isFinal: true, speaker: run.speaker });
+        onTranscript({
+          text: run.text,
+          isFinal: true,
+          speaker: run.speaker,
+          channel,
+        });
       }
     });
     conn.on('error', (e) =>

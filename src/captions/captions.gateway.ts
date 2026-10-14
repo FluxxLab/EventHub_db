@@ -10,6 +10,7 @@ import type { Socket } from 'socket.io';
 import { Rooms } from '../common/realtime/realtime.service';
 import { CAPTURE_DESKS_ROOM, CaptionsService } from './captions.service';
 import { CaptionLanguage, toCaptionLanguage } from './translation/languages';
+import type { RawAudioFormat } from './transcription/transcription.interface';
 
 /**
  * Delegates on older builds send a bare sessionId, which means English.
@@ -43,11 +44,33 @@ const roomKey = (sessionId: string, language: string) =>
 interface PendingCapture {
   room: string;
   diarise: boolean;
+  /** Raw PCM from a multi-mic desk; undefined for a desk's WebM. */
+  audio?: RawAudioFormat;
   nextTry: number;
 }
 
 /** How often a refused desk's audio re-tries the room's lock. */
 const CAPTURE_RETRY_MS = 2_000;
+
+/**
+ * A desk's raw multi-mic format, checked: 16 kHz 16-bit PCM with 2 to 32
+ * channels, one per mic. Anything else is ignored and the desk is taken to be
+ * sending WebM, as before.
+ */
+export function deskAudio(body: unknown): RawAudioFormat | undefined {
+  const a = (
+    body as {
+      audio?: { encoding?: unknown; sampleRate?: unknown; channels?: unknown };
+    } | null
+  )?.audio;
+  if (!a || a.encoding !== 'linear16' || a.sampleRate !== 16_000) {
+    return undefined;
+  }
+  const channels = Number(a.channels);
+  return Number.isInteger(channels) && channels >= 2 && channels <= 32
+    ? { encoding: 'linear16', sampleRate: 16_000, channels }
+    : undefined;
+}
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class CaptionsGateway implements OnGatewayDisconnect {
@@ -126,13 +149,15 @@ export class CaptionsGateway implements OnGatewayDisconnect {
   @SubscribeMessage('capture:start')
   async startCapture(
     @ConnectedSocket() socket: Socket,
-    @MessageBody() body: string | { room: string; diarise?: boolean },
+    @MessageBody()
+    body: string | { room: string; diarise?: boolean; audio?: RawAudioFormat },
   ) {
     if (!CaptionsGateway.canCapture(socket)) return { error: 'forbidden' };
 
     // Older capture pages send a bare room string, which means diarise.
     const room = typeof body === 'string' ? body : body.room;
     const diarise = typeof body === 'string' ? true : body.diarise !== false;
+    const audio = typeof body === 'string' ? undefined : deskAudio(body);
 
     // A desk switching rooms on the same socket lets go of the old one.
     const previous = socket.data.captureRoom as string | undefined;
@@ -145,6 +170,7 @@ export class CaptionsGateway implements OnGatewayDisconnect {
       room,
       diarise,
       socket.id,
+      { source: 'desk', audio },
     );
     if (!started.ok) {
       /**
@@ -161,6 +187,7 @@ export class CaptionsGateway implements OnGatewayDisconnect {
       socket.data.pendingCapture = {
         room,
         diarise,
+        audio,
         nextTry: Date.now() + CAPTURE_RETRY_MS,
       } satisfies PendingCapture;
       return {
@@ -204,7 +231,10 @@ export class CaptionsGateway implements OnGatewayDisconnect {
     if (!pending || Date.now() < pending.nextTry) return;
     pending.nextTry = Date.now() + CAPTURE_RETRY_MS;
     void this.captionsService
-      .startRoom(pending.room, pending.diarise, socket.id)
+      .startRoom(pending.room, pending.diarise, socket.id, {
+        source: 'desk',
+        audio: pending.audio,
+      })
       .then((started) => {
         if (!started.ok) return;
         if (socket.disconnected || socket.data.pendingCapture !== pending) {

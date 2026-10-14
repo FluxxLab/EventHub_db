@@ -54,6 +54,14 @@ export class TranscriptSegment {
   @Column({ type: 'smallint', nullable: true })
   speaker: number | null;
 
+  /**
+   * The mic it was said into, 1-based, when the room's mics reach the
+   * captions one per channel. Null for a mixed feed. Whose voice it is comes
+   * from the session's mics (sessions.mics).
+   */
+  @Column({ type: 'smallint', nullable: true })
+  mic: number | null;
+
   @Column({
     type: 'enum',
     enum: TranscriptSource,

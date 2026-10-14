@@ -150,6 +150,8 @@ export interface CaptionPayload {
   aiGenerated: true;
   language: string;
   speaker?: number | null;
+  /** The mic it was said into (1-based), when the room sends one mic per channel. */
+  mic?: number | null;
   /** When the English was said - also on translations of it. */
   at: string;
   /**
@@ -579,6 +581,10 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     room: string,
     audio: RawAudioFormat | undefined,
   ): Promise<void> {
+    // A multi-mic room is not re-transcribed afterwards: the archive pass
+    // guesses voices, and each mic already is one voice, so its live lines are
+    // the transcript.
+    if (audio && audio.channels > 1) return;
     const free = await freeBytes(tmpdir());
     if (free !== null && free < this.minFreeDiskBytes) {
       this.logger.error(
@@ -853,6 +859,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     if (!session) return; // break time - nothing live in this room, drop the fragment
 
     const said = new Date(seq);
+    const mic = event.channel === undefined ? null : event.channel + 1;
     const payload: CaptionPayload = {
       sessionId: session.id,
       // Second pass over Deepgram's own filter - see profanity.ts. The row
@@ -863,6 +870,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       aiGenerated: true,
       language: CaptionLanguage.EN,
       speaker: event.speaker,
+      mic,
       at: said.toISOString(),
       seq,
     };
@@ -889,6 +897,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
         room,
         text: event.text,
         speaker: event.speaker ?? null,
+        mic,
         language: 'en',
         createdAt: said,
       })
@@ -912,6 +921,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       text: event.text,
       context,
       speaker: event.speaker,
+      mic,
       seq,
       segmentId,
       persisted,
@@ -938,6 +948,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     text: string;
     context: string[];
     speaker: number | undefined;
+    mic: number | null;
     seq: number;
     segmentId: string;
     persisted: Promise<boolean>;
@@ -984,6 +995,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       room: string;
       text: string;
       speaker: number | undefined;
+      mic: number | null;
       seq: number;
       segmentId: string;
     },
@@ -1016,6 +1028,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
             room: line.room,
             text: translated,
             speaker: line.speaker ?? null,
+            mic: line.mic,
             language,
             sourceSegmentId: line.segmentId,
             createdAt: at,
@@ -1038,6 +1051,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
         // Carried through from the English final: the label is rendered by
         // the client, so it never goes through the translator.
         speaker: line.speaker,
+        mic: line.mic,
         at: at.toISOString(),
         seq: line.seq,
       };
@@ -1392,6 +1406,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
                 room: source.room,
                 text,
                 speaker: source.speaker,
+                mic: source.mic,
                 language,
                 sourceSegmentId: source.id,
                 offsetMs: source.offsetMs,
