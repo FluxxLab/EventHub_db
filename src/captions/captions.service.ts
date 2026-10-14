@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RealtimeService, Rooms } from '../common/realtime/realtime.service';
 import { SessionsService } from '../sessions/sessions.service';
+import { micNames } from '../sessions/mic-names';
 import { TranscriptSegment } from './entities/transcript-segment.entity';
 import { TRANSCRIPTION_PROVIDER } from './transcription/transcription.interface';
 import type {
@@ -152,6 +153,8 @@ export interface CaptionPayload {
   speaker?: number | null;
   /** The mic it was said into (1-based), when the room sends one mic per channel. */
   mic?: number | null;
+  /** Who is on that mic (Captions > Mics); null while nobody named it. */
+  name?: string | null;
   /** When the English was said - also on translations of it. */
   at: string;
   /**
@@ -860,6 +863,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
 
     const said = new Date(seq);
     const mic = event.channel === undefined ? null : event.channel + 1;
+    const name = mic === null ? null : (micNames(session).get(mic) ?? null);
     const payload: CaptionPayload = {
       sessionId: session.id,
       // Second pass over Deepgram's own filter - see profanity.ts. The row
@@ -871,6 +875,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       language: CaptionLanguage.EN,
       speaker: event.speaker,
       mic,
+      name,
       at: said.toISOString(),
       seq,
     };
@@ -922,6 +927,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       context,
       speaker: event.speaker,
       mic,
+      name,
       seq,
       segmentId,
       persisted,
@@ -949,6 +955,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     context: string[];
     speaker: number | undefined;
     mic: number | null;
+    name: string | null;
     seq: number;
     segmentId: string;
     persisted: Promise<boolean>;
@@ -996,6 +1003,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       text: string;
       speaker: number | undefined;
       mic: number | null;
+      name: string | null;
       seq: number;
       segmentId: string;
     },
@@ -1052,6 +1060,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
         // the client, so it never goes through the translator.
         speaker: line.speaker,
         mic: line.mic,
+        name: line.name,
         at: at.toISOString(),
         seq: line.seq,
       };
@@ -1267,7 +1276,14 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     language = 'en',
     limit = 60,
   ): Promise<
-    { text: string; speaker: number | null; at: Date; seq: number }[]
+    {
+      text: string;
+      speaker: number | null;
+      mic: number | null;
+      name: string | null;
+      at: Date;
+      seq: number;
+    }[]
   > {
     // Served by idx_transcript_session_language_order (CaptionIndexes).
     const rows = await this.segments.find({
@@ -1288,12 +1304,24 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
 
     // seq matches what the live `caption` event carried for the same line,
     // so a client can merge history with lines that arrived meanwhile.
+    const names = await this.micNamesOf(sessionId);
     return rows.reverse().map((r) => ({
       text: maskProfanity(r.text),
       speaker: r.speaker,
+      mic: r.mic,
+      name: r.mic === null ? null : (names.get(r.mic) ?? null),
       at: r.createdAt,
       seq: seqOf(r),
     }));
+  }
+
+  /** Who is on each of the session's mics now; empty when it has none named (or is gone). */
+  private async micNamesOf(sessionId: string): Promise<Map<number, string>> {
+    try {
+      return micNames(await this.session.findById(sessionId));
+    } catch {
+      return new Map();
+    }
   }
 
   /**
@@ -1454,9 +1482,23 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
    * interleaved, which reads as a corrupted transcript rather than a complete
    * one. Defaults to English so existing admin callers are unchanged.
    */
-  fullTranscript(
+  async fullTranscript(
     sessionId: string,
     language = 'en',
+  ): Promise<(TranscriptSegment & { name: string | null })[]> {
+    const [rows, names] = await Promise.all([
+      this.transcriptRows(sessionId, language),
+      this.micNamesOf(sessionId),
+    ]);
+    return rows.map((r) => ({
+      ...r,
+      name: r.mic === null ? null : (names.get(r.mic) ?? null),
+    }));
+  }
+
+  private transcriptRows(
+    sessionId: string,
+    language: string,
   ): Promise<TranscriptSegment[]> {
     return this.segments.find({
       where: { sessionId, language },
