@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { BleedFilter } from './bleed-filter';
 import { ConfigService } from '@nestjs/config';
 import { DeepgramClient } from '@deepgram/sdk';
 import { createReadStream } from 'node:fs';
@@ -257,6 +258,8 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
      * separating the voices and the microphone is the thing to fix.
      */
     let voicesHeard = 0;
+    // one mic per channel: the same words heard on two mics keep one copy
+    const bleed = (opts.audio?.channels ?? 1) > 1 ? new BleedFilter() : null;
 
     conn.on('message', (message) => {
       if (message.type !== 'Results') return; //union also carries Metadata/UtteranceEnd/SpeechStarted
@@ -288,18 +291,29 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
             `Deepgram separating ${voicesHeard} voice(s) (${opts.room})`,
           );
         }
-        onTranscript({
+        const event = {
           text: run.text,
           isFinal: true,
           speaker: run.speaker,
           channel,
-        });
+        };
+        if (bleed && channel !== undefined) {
+          bleed.push({
+            text: run.text,
+            channel,
+            confidence: alternative?.confidence ?? 0,
+            emit: () => onTranscript(event),
+          });
+        } else {
+          onTranscript(event);
+        }
       }
     });
     conn.on('error', (e) =>
       this.logger.error(`Deepgram error (${opts.room}): ${e.message}`),
     );
     conn.on('close', (event) => {
+      bleed?.flush();
       /**
        * The code is the whole diagnosis. 1000 is a clean close, 1011 with
        * NET-0001 means Deepgram received no decodable audio for ten seconds
