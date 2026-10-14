@@ -2,10 +2,12 @@ import {
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BASE_TERMS, captionTerms, MAX_TERMS } from './caption-terms';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RealtimeService, Rooms } from '../common/realtime/realtime.service';
@@ -51,7 +53,8 @@ import {
 /**
  * extends from the agenda
  */
-const SUMMIT_KEYWORDS = ['Pitchathon', 'GBV', 'GS-26'];
+/** Listened for when a session's own terms cannot be read (see termsFor). */
+const SUMMIT_KEYWORDS = BASE_TERMS;
 
 /**
  * Where capture:restart goes. Only capture desks join it (on capture:start),
@@ -505,6 +508,60 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * The words this session's captions listen for: the event's vocabulary,
+   * its name, and the speakers on stage with their organisations. Captions
+   * never wait on this: if it cannot be read, the base terms are used.
+   */
+  private async termsFor(sessionId: string): Promise<string[]> {
+    try {
+      const session = await this.session.findById(sessionId);
+      const [edition] = session.editionId
+        ? await this.segments.manager.query<
+            { name: string; shortName: string; captionTerms: string[] }[]
+          >(
+            `SELECT name, "shortName", "captionTerms" FROM editions WHERE id = $1`,
+            [session.editionId],
+          )
+        : [];
+      return captionTerms({
+        event: edition,
+        vocabulary: edition?.captionTerms,
+        speakers: session.speakers,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `caption terms for ${sessionId} not read: ${(error as Error).message}`,
+      );
+      return SUMMIT_KEYWORDS;
+    }
+  }
+
+  /** An event's caption vocabulary, as the console edits it. */
+  async vocabulary(editionId: string): Promise<string[]> {
+    const [row] = await this.segments.manager.query<
+      { captionTerms: string[] }[]
+    >(`SELECT "captionTerms" FROM editions WHERE id = $1`, [editionId]);
+    if (!row) throw new NotFoundException('Event not found');
+    return row.captionTerms ?? [];
+  }
+
+  /**
+   * Replaces an event's caption vocabulary: trimmed, each once. Used from the
+   * next time a session goes live; a stream already open keeps its terms.
+   */
+  async setVocabulary(editionId: string, terms: string[]): Promise<string[]> {
+    const clean = captionTerms({ vocabulary: terms }).filter((t) =>
+      terms.some((given) => given.trim().toLowerCase() === t.toLowerCase()),
+    );
+    const updated = await this.segments.manager.query<{ id: string }[]>(
+      `UPDATE editions SET "captionTerms" = $2 WHERE id = $1 RETURNING id`,
+      [editionId, clean.slice(0, MAX_TERMS)],
+    );
+    if (!updated.length) throw new NotFoundException('Event not found');
+    return clean;
+  }
+
   private async openTranscription(
     room: string,
     sessionId: string,
@@ -534,7 +591,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       stream = await this.transcription.openStream(
         {
           room,
-          keywords: SUMMIT_KEYWORDS,
+          keywords: await this.termsFor(sessionId),
           diarise: held.diarise,
           audio: held.audio,
           // Raw PCM decodes from any byte, so only a desk needs restarting.

@@ -224,6 +224,15 @@ export class Edition {
   @Column({ type: 'text', array: true, default: '{}' })
   ticketTerms: string[];
 
+  /**
+   * Words the captions should listen for at this event (Captions >
+   * Vocabulary): acronyms, programme names, places, phrases that would
+   * otherwise be heard as common words. Added to the speakers' names and the
+   * event's own (see captions/caption-terms.ts).
+   */
+  @Column({ type: 'text', array: true, default: '{}' })
+  captionTerms: string[];
+
   /** The app's My Events grid files the edition under this. */
   @Column({
     type: 'enum',

@@ -8,6 +8,8 @@ import {
   Post,
   Res,
   Query,
+  Body,
+  Put,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -27,6 +29,7 @@ import { Audit } from '../common/decorators/audit.decorator';
 import { EventSeverity } from '../security/entities/security-event.entity';
 import type { Response } from 'express';
 import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
+import { CaptionVocabularyDto } from './dto/caption-vocabulary.dto';
 
 @ApiTags('captions')
 @ApiBearerAuth()
@@ -37,6 +40,35 @@ export class CaptionsController {
     private readonly sessions: SessionsService,
     private readonly captions: CaptionsService,
   ) {}
+
+  @Get('vocabulary/:editionId')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
+  @EditionScoped({ from: 'param', key: 'editionId' })
+  @ApiOperation({
+    summary:
+      "An event's caption vocabulary: words the captions listen for, beside the speakers' names",
+  })
+  vocabulary(@Param('editionId', ParseUUIDPipe) editionId: string) {
+    return this.captions.vocabulary(editionId);
+  }
+
+  @Put('vocabulary/:editionId')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
+  @EditionScoped({ from: 'param', key: 'editionId' })
+  @Audit({
+    type: 'caption_vocabulary_set',
+    description: 'Caption vocabulary changed',
+  })
+  @ApiOperation({
+    summary:
+      "Replace an event's caption vocabulary; used from the next session that goes live",
+  })
+  setVocabulary(
+    @Param('editionId', ParseUUIDPipe) editionId: string,
+    @Body() dto: CaptionVocabularyDto,
+  ) {
+    return this.captions.setVocabulary(editionId, dto.terms);
+  }
 
   @Get(':sessionid')
   @ApiOperation({ summary: 'Token to listen to a live session;s audio in app' })
