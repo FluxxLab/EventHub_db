@@ -36,6 +36,7 @@ const EDITION_OF: Record<
   libraryItem: `SELECT "editionId" FROM library_items WHERE id = $1`,
   meal: `SELECT "editionId" FROM meals WHERE id = $1`,
   mealCounter: `SELECT "editionId" FROM meal_counters WHERE id = $1`,
+  callToAction: `SELECT "editionId" FROM calls_to_action WHERE id = $1`,
 };
 
 /**

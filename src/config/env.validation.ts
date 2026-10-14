@@ -122,6 +122,8 @@ export class EnvironmentVariables {
   @IsOptional() @IsInt() @Min(100) CAPTIONS_MIN_FREE_DISK_MB?: number;
   /** Simultaneous Claude translation calls per API replica (captions). Default 4. */
   @IsOptional() @IsInt() @Min(1) TRANSLATION_CONCURRENCY?: number;
+  /** The Claude model that finds a session's calls to action (default claude-opus-5-5); uses ANTHROPIC_API_KEY. */
+  @IsOptional() @IsString() ANALYSIS_MODEL?: string;
   /** Comma-separated Google OAuth client IDs (web, iOS, Android) accepted by POST /auth/google; unset disables Google sign-in. */
   @IsOptional() @IsString() GOOGLE_CLIENT_IDS?: string;
 

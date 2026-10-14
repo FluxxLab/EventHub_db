@@ -1,0 +1,108 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { AuthUser } from '../auth/strategies/jwt.stategies';
+import { Audit } from '../common/decorators/audit.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Roles } from '../common/decorators/roles.decorator';
+import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
+import { AccessTier } from '../delegate/entities/delegate.entity';
+import { CallsToActionService } from './calls-to-action.service';
+import {
+  CreateCallToActionDto,
+  MergeCallsToActionDto,
+  SaveCallToActionDto,
+} from './dto/calls-to-action.dto';
+
+/** An event's calls to action: analysed from its sessions, reviewed by its organisers. */
+@ApiTags('calls-to-action')
+@ApiBearerAuth()
+@Controller()
+export class CallsToActionController {
+  constructor(private readonly calls: CallsToActionService) {}
+
+  @Get('editions/:id/calls-to-action')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      "An event's calls to action, how far each session has been analysed, and whether the AI is set up",
+  })
+  list(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.list(id);
+  }
+
+  @Get('editions/:id/calls-to-action/targets')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      'Who a call to action may be directed at: the usual groups and the event’s organisations',
+  })
+  targets(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.targets(id);
+  }
+
+  @Post('sessions/:id/analyse')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'session' })
+  @Audit({
+    type: 'session_analysed',
+    description: 'Session transcript analysed for calls to action',
+  })
+  @ApiOperation({
+    summary:
+      'Read what the session has said since its last analysis and suggest its calls to action',
+  })
+  analyse(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.analyse(id);
+  }
+
+  @Post('editions/:id/calls-to-action')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({ summary: 'Add a call to action by hand (approved)' })
+  create(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateCallToActionDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.calls.create(id, user.id, dto);
+  }
+
+  @Patch('calls-to-action/:id')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'callToAction' })
+  @ApiOperation({
+    summary:
+      'Edit a call to action, or approve, reject or return it to suggested',
+  })
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SaveCallToActionDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.calls.update(id, user.id, dto);
+  }
+
+  @Post('calls-to-action/merge')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'body', key: 'into', via: 'callToAction' })
+  @ApiOperation({
+    summary:
+      'Fold duplicates into one; their speakers join it and they stay on record as merged',
+  })
+  merge(@Body() dto: MergeCallsToActionDto, @CurrentUser() user: AuthUser) {
+    return this.calls.merge(dto.into, dto.ids, user.id);
+  }
+}
