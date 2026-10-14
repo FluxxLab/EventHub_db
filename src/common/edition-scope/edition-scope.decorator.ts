@@ -30,7 +30,8 @@ export type EditionVia =
   | 'galleryPhoto'
   | 'libraryItem'
   | 'meal'
-  | 'mealCounter';
+  | 'mealCounter'
+  | 'callToAction';
 
 /**
  * Where an endpoint's edition comes from, for the EditionScopeGuard:

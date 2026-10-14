@@ -43,6 +43,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { LeadsModule } from './leads/leads.module';
 import { MealsModule } from './meals/meals.module';
+import { CallsToActionModule } from './calls-to-action/calls-to-action.module';
 import { GalleryModule } from './gallery/gallery.module';
 import { LibraryModule } from './library/library.module';
 import { ThrottleModule } from './common/throttle/throttle.module';
@@ -124,6 +125,7 @@ import { AppThrottlerGuard } from './common/throttle/app-throttler.guard';
     CampaignsModule,
     LeadsModule,
     MealsModule,
+    CallsToActionModule,
     GalleryModule,
     LibraryModule,
   ],
