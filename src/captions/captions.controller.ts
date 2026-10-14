@@ -147,13 +147,21 @@ export class CaptionsController {
     @Res() res: Response,
   ) {
     const segments = await this.captions.fullTranscript(sessionId);
+    // the name on the mic, else the mic, else the guessed voice
+    const who = (s: (typeof segments)[number]) =>
+      s.name ??
+      (s.mic !== null
+        ? `Mic ${s.mic}`
+        : s.speaker === null
+          ? ''
+          : `Speaker ${s.speaker + 1}`);
     if (format === 'txt') {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       return res.send(
         segments
           .map(
             (s) =>
-              `[${s.createdAt.toISOString()}]${s.speaker === null ? '' : ` Speaker ${s.speaker + 1}:`} ${s.text}`,
+              `[${s.createdAt.toISOString()}]${who(s) ? ` ${who(s)}:` : ''} ${s.text}`,
           )
           .join('\n'),
       );
@@ -161,13 +169,15 @@ export class CaptionsController {
     const cell = (v: string | number | boolean | null | undefined) =>
       `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = [
-      'createdAt,room,speaker,source,text',
+      'createdAt,room,speaker,mic,name,source,text',
       ...segments.map((s) =>
         [
           s.createdAt.toISOString(),
           s.room,
           // 1-based for readers; empty when the segment was not diarised.
           s.speaker === null ? '' : s.speaker + 1,
+          s.mic ?? '',
+          cell(s.name),
           s.source,
           cell(s.text),
         ].join(','),

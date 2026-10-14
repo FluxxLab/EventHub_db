@@ -522,6 +522,8 @@ export class SessionsService implements OnApplicationBootstrap {
     const editionId = await this.currentEditionId();
     const qb = this.sessions
       .createQueryBuilder('s')
+      // with its speakers: a caption's mic is named from them (micNames)
+      .leftJoinAndSelect('s.speakers', 'speaker')
       .where('LOWER(TRIM(s.room)) = LOWER(TRIM(:room))', { room })
       .andWhere('s.status = :status', { status: SessionStatus.LIVE });
     if (editionId) qb.andWhere('s.editionId = :editionId', { editionId });

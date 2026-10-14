@@ -8,6 +8,7 @@ import { SessionStatus } from './entities/session.entity';
  */
 function build() {
   const qb = {
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     getOne: jest.fn().mockResolvedValue({ id: 's1', room: 'Main Hall' }),
