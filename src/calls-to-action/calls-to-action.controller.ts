@@ -20,6 +20,7 @@ import { AccessTier } from '../delegate/entities/delegate.entity';
 import { CallsToActionService } from './calls-to-action.service';
 import {
   CreateCallToActionDto,
+  DeckScopeDto,
   MergeCallsToActionDto,
   SaveCallToActionDto,
 } from './dto/calls-to-action.dto';
@@ -75,6 +76,21 @@ export class CallsToActionController {
     @Query('fromStart') fromStart?: string,
   ) {
     return this.calls.analyse(id, fromStart === 'true');
+  }
+
+  @Post('editions/:id/calls-to-action/deck-design')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      "A fresh AI design for a call-to-action deck: one session's slide or one day's deck, with the event's logo and cover",
+  })
+  designDeck(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() scope: DeckScopeDto,
+  ) {
+    return this.calls.designDeck(id, scope);
   }
 
   @Post('editions/:id/calls-to-action')
