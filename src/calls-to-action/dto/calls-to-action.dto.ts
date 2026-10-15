@@ -5,10 +5,12 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  Min,
   MinLength,
   ValidateIf,
 } from 'class-validator';
@@ -120,4 +122,24 @@ export class MergeCallsToActionDto {
   @ArrayMaxSize(50)
   @IsUUID('all', { each: true })
   ids: string[];
+}
+
+/** What a deck covers: one session (a single slide) or one day (the full deck). */
+export class DeckScopeDto {
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'One session: a single slide',
+  })
+  @IsOptional()
+  @IsUUID()
+  sessionId?: string;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    description: 'One day of the event: the full deck',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  day?: number;
 }

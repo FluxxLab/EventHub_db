@@ -9,6 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Not, Repository } from 'typeorm';
 import { CaptionsService } from '../captions/captions.service';
+import { StorageService } from '../common/storage/storage.service';
 import { EditionsService } from '../editions/editions.service';
 import { SessionsService } from '../sessions/sessions.service';
 import {
@@ -22,6 +23,29 @@ import type {
 } from './dto/calls-to-action.dto';
 import { CallToAction } from './entities/call-to-action.entity';
 import { SessionAnalysis } from './entities/session-analysis.entity';
+import { cleanDesign, type DeckDesign } from './deck/deck-design';
+import { ClaudeDeckDesigner, type DeckImage } from './deck/deck-designer';
+
+/** Images larger than this are not shown to Claude (its limit is 5 MB). */
+const MAX_IMAGE_BYTES = 3_500_000;
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+
+/** "8 – 9 Sept 2026", as the deck's cover shows the dates. */
+export function deckDates(startsAt: Date, endsAt: Date): string {
+  const day = (d: Date) => d.getUTCDate();
+  const month = (d: Date) =>
+    d
+      .toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })
+      .replace(/^Sep$/, 'Sept');
+  const year = (d: Date) => d.getUTCFullYear();
+  if (year(startsAt) !== year(endsAt))
+    return `${day(startsAt)} ${month(startsAt)} ${year(startsAt)} – ${day(endsAt)} ${month(endsAt)} ${year(endsAt)}`;
+  if (month(startsAt) !== month(endsAt))
+    return `${day(startsAt)} ${month(startsAt)} – ${day(endsAt)} ${month(endsAt)} ${year(endsAt)}`;
+  return day(startsAt) === day(endsAt)
+    ? `${day(startsAt)} ${month(startsAt)} ${year(startsAt)}`
+    : `${day(startsAt)} – ${day(endsAt)} ${month(endsAt)} ${year(endsAt)}`;
+}
 
 /** Who calls to action are usually directed at, before the event's own agencies are known. */
 export const DEFAULT_TARGETS = [
@@ -73,7 +97,126 @@ export class CallsToActionService {
     private readonly sessions: SessionsService,
     private readonly editions: EditionsService,
     private readonly dataSource: DataSource,
+    private readonly designer: ClaudeDeckDesigner,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * A fresh design for the event's call-to-action deck: Claude reads the
+   * event's brand colour, logo, cover and approved calls and answers with
+   * palette, layouts, shapes and sections. The logo and cover come back too,
+   * for the console to place. `design` is null when Claude is not set up or
+   * cannot answer; the console then draws the deck in the event's colours.
+   */
+  async designDeck(
+    editionId: string,
+    scope: { sessionId?: string; day?: number },
+  ): Promise<{
+    design: DeckDesign | null;
+    reason: string | null;
+    brandColor: string | null;
+    logo: DeckImage | null;
+    cover: DeckImage | null;
+  }> {
+    if (!scope.sessionId === !scope.day) {
+      throw new BadRequestException(
+        'Choose one session (a single slide) or one day (the full deck).',
+      );
+    }
+    const edition = await this.editions.findById(editionId);
+    const all = await this.calls.find({
+      where: {
+        editionId,
+        status: 'approved',
+        ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+      },
+      order: { saidAt: 'ASC', createdAt: 'ASC' },
+    });
+    const sessionsOf = new Map<string, { title: string; day: number }>();
+    for (const id of new Set(all.map((c) => c.sessionId))) {
+      if (!id) continue;
+      const session = await this.sessions.findById(id).catch(() => null);
+      if (session)
+        sessionsOf.set(id, { title: session.title, day: session.day });
+    }
+    const approved = scope.day
+      ? all.filter(
+          (c) => c.sessionId && sessionsOf.get(c.sessionId)?.day === scope.day,
+        )
+      : all;
+    if (approved.length === 0) {
+      throw new BadRequestException(
+        scope.sessionId
+          ? 'This session has no approved calls to action yet.'
+          : `Day ${scope.day} has no approved calls to action yet.`,
+      );
+    }
+    const [logo, cover] = await Promise.all([
+      this.image(edition.logoImage, 'logo'),
+      this.image(edition.coverImage, 'cover'),
+    ]);
+    const { answer, reason } = await this.designer.design(
+      {
+        event: {
+          name: edition.name,
+          shortName: edition.shortName,
+          when: deckDates(new Date(edition.startsAt), new Date(edition.endsAt)),
+          where: edition.city ?? edition.venue,
+        },
+        brandColor: edition.brandColor,
+        scope: scope.sessionId
+          ? {
+              kind: 'session',
+              title: sessionsOf.get(scope.sessionId)?.title ?? 'This session',
+            }
+          : { kind: 'day', day: scope.day! },
+        calls: approved.map((c) => ({
+          id: c.id,
+          type: c.type,
+          shortText: c.shortText,
+          directedAt: c.directedAt,
+          proposedBy: c.proposedBy,
+          theme: c.theme,
+          session:
+            (c.sessionId && sessionsOf.get(c.sessionId)?.title) || 'No session',
+        })),
+      },
+      [logo, cover].filter(
+        (i): i is DeckImage => !!i && i.data.length * 0.75 <= MAX_IMAGE_BYTES,
+      ),
+    );
+    return {
+      design: answer
+        ? cleanDesign(
+            answer,
+            approved.map((c) => c.id),
+            edition.brandColor,
+          )
+        : null,
+      reason,
+      brandColor: edition.brandColor,
+      logo,
+      cover,
+    };
+  }
+
+  /** A stored image as base64, or null when there is none or it cannot be read. */
+  private async image(
+    stored: string | null,
+    label: DeckImage['label'],
+  ): Promise<DeckImage | null> {
+    try {
+      const url = await this.storage.resolveStoredUrl(stored);
+      if (!url) return null;
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      const type = res.headers.get('content-type')?.split(';')[0].trim() ?? '';
+      if (!res.ok || !IMAGE_TYPES.includes(type)) return null;
+      const data = Buffer.from(await res.arrayBuffer()).toString('base64');
+      return { label, mediaType: type as DeckImage['mediaType'], data };
+    } catch {
+      return null;
+    }
+  }
 
   /** The event's calls to action, with where each session's analysis has got to. */
   async list(editionId: string) {

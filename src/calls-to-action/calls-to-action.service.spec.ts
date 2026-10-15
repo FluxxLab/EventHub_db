@@ -136,6 +136,8 @@ function setup(
     sessions,
     editions,
     dataSource,
+    {} as never, // the deck designer: not used here
+    {} as never, // storage: not used here
   );
   return { service, saved, read, ai, updates, analysis: () => analysis };
 }
