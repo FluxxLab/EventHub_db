@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Param,
+  ParseEnumPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -29,6 +30,12 @@ import { BrowseEditionsDto } from './dto/browse-editions.dto';
 import { CreateEditionDto, UpdateEditionDto } from './dto/create-edition.dto';
 import { SetEditionCoverDto } from './dto/edition-cover.dto';
 import { SetEditionLogoDto } from './dto/edition-logo.dto';
+import {
+  BRAND_ASSETS,
+  BrandUploadDto,
+  SetBrandAssetDto,
+  type BrandAsset,
+} from './dto/edition-brand.dto';
 import {
   CreateEditionRoomDto,
   UpdateEditionRoomDto,
@@ -286,6 +293,48 @@ export class EditionsController {
   @ApiResponse({ status: 404, description: 'No such edition' })
   async removeLogo(@Param('id', ParseUUIDPipe) id: string) {
     await this.service.removeLogo(id);
+  }
+
+  @Post(':id/brand-upload/:asset')
+  @Roles(AccessTier.ADMIN)
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Signed URL for a brand asset (logo-dark: an image; guide: a PDF): PUT the file to uploadUrl, then PUT /editions/:id/brand/:asset with the key',
+  })
+  brandUpload(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('asset', new ParseEnumPipe(BRAND_ASSETS)) asset: BrandAsset,
+    @Body() dto: BrandUploadDto,
+  ) {
+    return this.service.presignBrandAsset(id, asset, dto.contentType);
+  }
+
+  @Put(':id/brand/:asset')
+  @Roles(AccessTier.ADMIN)
+  @ApiOperation({
+    summary:
+      'Set or replace the dark-background logo or the brand guide; the previous upload is deleted',
+  })
+  setBrandAsset(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('asset', new ParseEnumPipe(BRAND_ASSETS)) asset: BrandAsset,
+    @Body() dto: SetBrandAssetDto,
+  ) {
+    return this.service.setBrandAsset(id, asset, dto.key, dto.name);
+  }
+
+  @Delete(':id/brand/:asset')
+  @Roles(AccessTier.ADMIN)
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Remove the dark-background logo or the brand guide',
+  })
+  async removeBrandAsset(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('asset', new ParseEnumPipe(BRAND_ASSETS)) asset: BrandAsset,
+  ) {
+    await this.service.removeBrandAsset(id, asset);
   }
 
   @Get()

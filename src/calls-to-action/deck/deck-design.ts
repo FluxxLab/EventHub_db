@@ -82,8 +82,8 @@ export const DeckDesignAnswer = z.object({
     text: z.string(),
     muted: z.string(),
   }),
-  headingFont: z.enum(HEADING_FONTS),
-  bodyFont: z.enum(BODY_FONTS),
+  headingFont: z.string(),
+  bodyFont: z.string(),
   uppercaseTitles: z.boolean(),
   deckTitle: z.string(),
   deckSubtitle: z.string(),
@@ -163,6 +163,8 @@ export type DeckBrief = {
   brandColor: string | null;
   /** One session's single slide, or one day's full deck. */
   scope: { kind: 'session'; title: string } | { kind: 'day'; day: number };
+  /** Whether the event's brand guide (a PDF) is attached. */
+  guide?: boolean;
   calls: {
     id: string;
     type: string;
@@ -181,6 +183,19 @@ const HEX = /^#?([0-9a-f]{6})$/i;
 export function hex(value: string | null | undefined): string | null {
   const m = value?.trim().match(HEX);
   return m ? `#${m[1].toLowerCase()}` : null;
+}
+
+/**
+ * A font name as PowerPoint takes it: the brand guide's own ("Montserrat",
+ * "Funnel Display") or one from the lists; anything that is not a plain name
+ * falls back. A font missing on the viewer's computer shows as a substitute.
+ */
+export function font(
+  name: string | null | undefined,
+  fallback: string,
+): string {
+  const n = (name ?? '').replace(/\s+/g, ' ').trim();
+  return /^[A-Za-z][A-Za-z0-9 -]{1,39}$/.test(n) ? n : fallback;
 }
 
 const clamp = (n: number, lo: number, hi: number) =>
@@ -248,8 +263,8 @@ export function cleanDesign(
   return {
     rationale: text(raw.rationale, 300),
     palette,
-    headingFont: raw.headingFont,
-    bodyFont: raw.bodyFont,
+    headingFont: font(raw.headingFont, 'Arial Black'),
+    bodyFont: font(raw.bodyFont, 'Calibri'),
     uppercaseTitles: raw.uppercaseTitles,
     deckTitle: text(raw.deckTitle, 60) || 'Calls to action',
     deckSubtitle: text(raw.deckSubtitle, 140),
@@ -279,14 +294,16 @@ export function cleanDesign(
   };
 }
 
-export const DESIGN_INSTRUCTIONS = `You design the call-to-action deck of one event: the recommendations and pledges made in its sessions, approved by the organisers. Each event gets its own design. Make this one feel made for this event: its brand colour, its logo and cover (attached when it has them), its subject. Do not settle on the same choices every time: pick the fonts, layouts and shapes that suit this event's look and subject, so two events' decks look clearly different.
+export const DESIGN_INSTRUCTIONS = `You design the call-to-action deck of one event: the recommendations and pledges made in its sessions, approved by the organisers. Each event gets its own design. Make this one feel made for this event: its brand colour, its logo and cover (attached when it has them), its subject.
+
+When the event's brand guide is attached (a PDF), it is the authority and outranks everything below: take the palette from its colours exactly (its primary colour as primary, its other colours as secondary and accent), its fonts, and its rules for the logo (clear space, which version goes on light and on dark backgrounds, what never to do), and draw the artwork from its own shapes and motifs. Where the guide and these instructions disagree, follow the guide, except that text must stay readable. The logo comes as "the event's logo" for light backgrounds and, when there is one, "the event's logo for dark backgrounds". Do not settle on the same choices every time: pick the fonts, layouts and shapes that suit this event's look and subject, so two events' decks look clearly different.
 
 The canvas is 16:9, 10 in wide and 5.625 in tall; positions and sizes are in inches from the top-left corner.
 
 Return:
 - rationale: one sentence on the idea behind the design.
 - palette, as #rrggbb: primary is the event's brand colour or a close shade of it and carries most of the colour; secondary and accent support it (take them from the logo or cover when there are any); background is the content slides' backdrop (light, near white, or a very pale tint of the brand); surface is the colour of cards and of the plate text sits on over shapes; text must read clearly on background and on surface (contrast 7:1 or better); muted is for small print and must still read on surface (4.5:1).
-- headingFont and bodyFont from the lists allowed; uppercaseTitles if the headings should be set in capitals.
+- headingFont and bodyFont: with a brand guide attached, the fonts it names for presentations and official documents (use them by their exact names, even if they are not standard Office fonts); otherwise choose from ${HEADING_FONTS.join(', ')} for headings and ${BODY_FONTS.join(', ')} for body text. uppercaseTitles if the headings should be set in capitals.
 - deckTitle (a few words, such as "Calls to Action") and deckSubtitle (one line on what the deck holds; the cover already shows the event's name, dates and place, so do not repeat them).
 - layouts: cover is arch (a domed plate over a large shape), split (a solid colour half with the title, the other half for the cover image or shapes), band (a broad colour band across the slide), frame (an inset plate framed by shapes) or photo (the cover image full bleed under a solid plate; only when there is a cover). summary is stats (big numbers) or statement (a headline and up to four points). section is cards (up to three calls side by side), list (up to four calls as rows) or spotlight (one call per slide, large; only when there are few calls). closing is circle, split or band.
 - art: the deck's artwork, as SVG drawn by you - this is what makes the deck look designed rather than assembled, so give it real care. Three pieces: cover, content (behind every content slide) and closing. Each is one <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"> (1 in = 160 units). Compose it like a designer: two or three layered forms built from the logo's or cover's own geometry (its curves, arcs, petals, angles), a full-bleed background fill or gentle gradient in the palette, overlapping translucent shapes (fill-opacity) for depth, one or two fine line accents (thin strokes, concentric arcs, dotted rhythms with stroke-dasharray), and a clear focal corner. Make each piece substantial and finished, like a designer's key visual, not a sketch: twelve to thirty elements, at least two gradients, translucent overlaps that make new tones where forms cross, varied scale (one large form, several medium, a few small details), and a fine-detail layer (hairline arcs, dotted or dashed rhythms, small dots or ticks) that rewards a closer look. Avoid a single centred motif and avoid plain circles on their own. Use only path, circle, ellipse, rect, line, polyline, polygon, g, defs, linearGradient, radialGradient, stop and clipPath, with transforms if needed. No text, images, filters, masks, patterns, styles, links or scripts. Keep each piece under 40 KB. Where text goes: on the cover the title sits on a plate (arch: a dome at the top centre; frame: a plate in the middle; split: a solid panel over the left half, so the right half is the art's; band: a solid band across the middle; photo: the cover image fills the slide and the art is laid over it, so keep it to the edges and leave the image visible); the content art sits behind titles, tables and cards, so inside x 80-1380 and y 40-815 draw nothing but the background (solid or a barely-there gradient between the background colour and a near tint), and put the forms in the right edge and the corners; the closing art must leave the left half quiet (closing layouts put the text there), except the band layout, which covers the middle with a solid band.
@@ -303,7 +320,7 @@ export function designPrompt(brief: DeckBrief, images: string[]): string {
     `EVENT: ${brief.event.name} (${brief.event.shortName})`,
     `WHEN: ${brief.event.when}${brief.event.where ? ` · ${brief.event.where}` : ''}`,
     `BRAND COLOUR: ${hex(brief.brandColor) ?? `${PIC_NAVY} (no brand colour set: PIC navy)`}`,
-    `ATTACHED: ${images.length ? images.join(' and ') : 'nothing (no logo or cover)'}`,
+    `ATTACHED: ${[...(brief.guide ? ["the event's brand guide (PDF)"] : []), ...images].join(', ') || 'nothing (no brand guide, logo or cover)'}`,
     brief.scope.kind === 'session'
       ? `DECK: one slide for the session "${brief.scope.title}"`
       : `DECK: the end-of-day deck for day ${brief.scope.day}`,
