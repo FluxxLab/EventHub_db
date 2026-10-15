@@ -32,7 +32,7 @@ export class ClaudeDeckDesigner {
   constructor(config: ConfigService) {
     const apiKey = config.get<string>('ANTHROPIC_API_KEY')?.trim();
     this.client = apiKey
-      ? new Anthropic({ apiKey, timeout: 180_000, maxRetries: 1 })
+      ? new Anthropic({ apiKey, timeout: 280_000, maxRetries: 1 })
       : null;
     this.model = config.get<string>('ANALYSIS_MODEL')?.trim() || DEFAULT_MODEL;
   }
@@ -50,7 +50,7 @@ export class ClaudeDeckDesigner {
     try {
       const response = await this.client.beta.messages.parse({
         model: this.model,
-        max_tokens: 12000,
+        max_tokens: 32000,
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
         system: DESIGN_INSTRUCTIONS,

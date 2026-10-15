@@ -93,6 +93,11 @@ export const DeckDesignAnswer = z.object({
     section: z.enum(SECTION_LAYOUTS),
     closing: z.enum(CLOSING_LAYOUTS),
   }),
+  art: z.object({
+    cover: z.string(),
+    content: z.string(),
+    closing: z.string(),
+  }),
   decor: z.object({
     cover: z.array(Shape),
     content: z.array(Shape),
@@ -111,7 +116,40 @@ export const DeckDesignAnswer = z.object({
 export type DeckDesignAnswer = z.infer<typeof DeckDesignAnswer>;
 
 export type DeckShape = z.infer<typeof Shape>;
-export type DeckDesign = DeckDesignAnswer;
+export type DeckDesign = Omit<DeckDesignAnswer, 'art'> & {
+  /** The slides' artwork as SVG, or null where Claude's could not be used (the shapes stand in). */
+  art: { cover: string | null; content: string | null; closing: string | null };
+};
+
+/** The largest artwork accepted, per slide. */
+export const MAX_SVG_LENGTH = 60_000;
+
+/**
+ * Claude's artwork, kept only when it is plain vector drawing PowerPoint can
+ * show: one <svg> with a 1600 × 900 viewBox and no script, events, text,
+ * embedded or linked images, external references, filters, masks or
+ * patterns (PowerPoint draws those badly or not at all). Anything else is
+ * dropped, and the design's shapes stand in.
+ */
+export function cleanSvg(svg: string | null | undefined): string | null {
+  const s = (svg ?? '').trim();
+  if (!s || s.length > MAX_SVG_LENGTH) return null;
+  if (!/^<svg[\s>]/i.test(s) || !/<\/svg>\s*$/i.test(s)) return null;
+  if (/viewBox\s*=\s*["']\s*0\s+0\s+1600\s+900\s*["']/i.test(s) === false)
+    return null;
+  const forbidden =
+    /<\s*(script|foreignObject|image|text|tspan|style|filter|mask|pattern|use|iframe|a)\b|\son\w+\s*=|javascript:|(xlink:)?href\s*=|url\(\s*['"]?(?!#)|@import|<!ENTITY|<!DOCTYPE/i;
+  if (forbidden.test(s)) return null;
+  const withNs = /xmlns\s*=/.test(s)
+    ? s
+    : s.replace(/^<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  // a fixed size, so it draws the same in PowerPoint as in the browser
+  return withNs.replace(
+    /^<svg\b([^>]*)>/i,
+    (_m, attrs: string) =>
+      `<svg${attrs.replace(/\s(width|height)\s*=\s*["'][^"']*["']/gi, '')} width="1600" height="900">`,
+  );
+}
 
 /** What Claude is told about the event and its calls. */
 export type DeckBrief = {
@@ -216,6 +254,11 @@ export function cleanDesign(
     deckTitle: text(raw.deckTitle, 60) || 'Calls to action',
     deckSubtitle: text(raw.deckSubtitle, 140),
     layouts: raw.layouts,
+    art: {
+      cover: cleanSvg(raw.art.cover),
+      content: cleanSvg(raw.art.content),
+      closing: cleanSvg(raw.art.closing),
+    },
     decor: {
       cover: cleanShapes(raw.decor.cover, 10),
       content: cleanShapes(raw.decor.content, 6),
@@ -246,7 +289,8 @@ Return:
 - headingFont and bodyFont from the lists allowed; uppercaseTitles if the headings should be set in capitals.
 - deckTitle (a few words, such as "Calls to Action") and deckSubtitle (one line on what the deck holds; the cover already shows the event's name, dates and place, so do not repeat them).
 - layouts: cover is arch (a domed plate over a large shape), split (a solid colour half with the title, the other half for the cover image or shapes), band (a broad colour band across the slide), frame (an inset plate framed by shapes) or photo (the cover image full bleed under a solid plate; only when there is a cover). summary is stats (big numbers) or statement (a headline and up to four points). section is cards (up to three calls side by side), list (up to four calls as rows) or spotlight (one call per slide, large; only when there are few calls). closing is circle, split or band.
-- decor: decorative shapes for the cover, the content slides and the closing slide. kind is ellipse, rect, roundRect, triangle, rtTriangle, diamond or rings (concentric outlines); colour names a palette role; shapes may bleed off the edges; transparency 0-90; rotate in degrees. The cover and closing take up to ten shapes and may fill the slide (the title sits on a solid plate). Content slides take up to six shapes, and they must stay out of the text: only where x is 8.6 or more, or y is 5.0 or more, or wholly off the top-left corner. Choose shapes that echo the logo or cover, and keep the same motif across the deck.
+- art: the deck's artwork, as SVG drawn by you - this is what makes the deck look designed rather than assembled, so give it real care. Three pieces: cover, content (behind every content slide) and closing. Each is one <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900"> (1 in = 160 units). Compose it like a designer: two or three layered forms built from the logo's or cover's own geometry (its curves, arcs, petals, angles), a full-bleed background fill or gentle gradient in the palette, overlapping translucent shapes (fill-opacity) for depth, one or two fine line accents (thin strokes, concentric arcs, dotted rhythms with stroke-dasharray), and a clear focal corner. Make each piece substantial and finished, like a designer's key visual, not a sketch: twelve to thirty elements, at least two gradients, translucent overlaps that make new tones where forms cross, varied scale (one large form, several medium, a few small details), and a fine-detail layer (hairline arcs, dotted or dashed rhythms, small dots or ticks) that rewards a closer look. Avoid a single centred motif and avoid plain circles on their own. Use only path, circle, ellipse, rect, line, polyline, polygon, g, defs, linearGradient, radialGradient, stop and clipPath, with transforms if needed. No text, images, filters, masks, patterns, styles, links or scripts. Keep each piece under 40 KB. Where text goes: on the cover the title sits on a plate (arch: a dome at the top centre; frame: a plate in the middle; split: a solid panel over the left half, so the right half is the art's; band: a solid band across the middle; photo: the cover image fills the slide and the art is laid over it, so keep it to the edges and leave the image visible); the content art sits behind titles, tables and cards, so inside x 80-1380 and y 40-815 draw nothing but the background (solid or a barely-there gradient between the background colour and a near tint), and put the forms in the right edge and the corners; the closing art must leave the left half quiet (closing layouts put the text there), except the band layout, which covers the middle with a solid band.
+- decor: decorative shapes for the cover, the content slides and the closing slide, used only where the art cannot be. kind is ellipse, rect, roundRect, triangle, rtTriangle, diamond or rings (concentric outlines); colour names a palette role; shapes may bleed off the edges; transparency 0-90; rotate in degrees. The cover and closing take up to ten shapes and may fill the slide (the title sits on a solid plate). Content slides take up to six shapes, and they must stay out of the text: only where x is 8.6 or more, or y is 5.0 or more, or wholly off the top-left corner. Choose shapes that echo the logo or cover, and keep the same motif across the deck.
 - summary: a headline and up to four short points, drawn only from the calls given (counts, who is called on most, recurring themes). Add nothing the calls do not say.
 - sections: group the calls the way that reads best for this event - by who is called on, or by theme when themes are clearer - each with a short title and an optional one-sentence intro. List every call id exactly once, in the order to present them.
 - nextSteps: three or four, each a lead verb ("Confirm") and the rest of the line.

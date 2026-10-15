@@ -1,4 +1,9 @@
-import { cleanDesign, hex, type DeckDesignAnswer } from './deck-design';
+import {
+  cleanDesign,
+  cleanSvg,
+  hex,
+  type DeckDesignAnswer,
+} from './deck-design';
 import { deckDates } from '../calls-to-action.service';
 
 const shape = (
@@ -16,6 +21,9 @@ const shape = (
   transparency: 0,
   ...over,
 });
+
+const ART =
+  '<svg viewBox="0 0 1600 900" width="10"><defs><linearGradient id="g"><stop offset="0" stop-color="#0e7c7b"/></linearGradient></defs><path d="M0 0h1600v900H0z" fill="url(#g)"/></svg>';
 
 const answer = (over: Partial<DeckDesignAnswer> = {}): DeckDesignAnswer => ({
   rationale: 'Rings from the logo, on a pale teal.',
@@ -38,6 +46,11 @@ const answer = (over: Partial<DeckDesignAnswer> = {}): DeckDesignAnswer => ({
     summary: 'statement',
     section: 'list',
     closing: 'band',
+  },
+  art: {
+    cover: ART,
+    content: '<svg viewBox="0 0 1600 900"><script>alert(1)</script></svg>',
+    closing: 'not svg',
   },
   decor: {
     cover: [shape()],
@@ -82,6 +95,29 @@ describe('deck design', () => {
       transparency: 90,
     });
     expect(design.summary.points).toHaveLength(4);
+  });
+
+  it('keeps artwork PowerPoint can draw, and nothing that could run or reach out', () => {
+    const design = cleanDesign(answer(), ['c1'], null);
+    expect(design.art.cover).toContain('xmlns="http://www.w3.org/2000/svg"');
+    expect(design.art.cover).toContain('width="1600" height="900"');
+    expect(design.art.cover).not.toContain('width="10"');
+    expect(design.art.content).toBeNull(); // a script
+    expect(design.art.closing).toBeNull(); // not SVG
+    expect(
+      cleanSvg(
+        '<svg viewBox="0 0 1600 900"><image href="https://x/y.png"/></svg>',
+      ),
+    ).toBeNull();
+    expect(
+      cleanSvg('<svg viewBox="0 0 1600 900"><rect onclick="x()"/></svg>'),
+    ).toBeNull();
+    expect(
+      cleanSvg(
+        '<svg viewBox="0 0 1600 900"><rect fill="url(https://x)"/></svg>',
+      ),
+    ).toBeNull();
+    expect(cleanSvg('<svg viewBox="0 0 800 600"><rect/></svg>')).toBeNull(); // wrong canvas
   });
 
   it('writes the dates as the cover shows them', () => {
