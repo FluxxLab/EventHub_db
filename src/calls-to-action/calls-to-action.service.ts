@@ -124,7 +124,13 @@ export class CallsToActionService {
    * Reads what the session has said since its last analysis and suggests its
    * calls to action. Nothing new since then is not an error: it says so.
    */
-  async analyse(sessionId: string) {
+  /**
+   * Reads what the session has said since its last analysis, or with
+   * `fromStart` the whole session again (to retry after editing the mics or
+   * the vocabulary, or to test). Calls already on the board are not
+   * suggested twice either way.
+   */
+  async analyse(sessionId: string, fromStart = false) {
     if (!this.ai.configured) {
       throw new ServiceUnavailableException(
         'AI analysis is not set up yet: add ANTHROPIC_API_KEY on the server.',
@@ -144,15 +150,16 @@ export class CallsToActionService {
       const edition = await this.editions.findById(session.editionId);
       const cursor = await this.analyses.findOneBy({ sessionId });
       const rows = (await this.captions.fullTranscript(sessionId, 'en')).filter(
-        (r) => !cursor || r.createdAt > cursor.analysedUpTo,
+        (r) => fromStart || !cursor || r.createdAt > cursor.analysedUpTo,
       );
       if (rows.length === 0) {
         return {
           added: [] as CallToAction[],
           read: 0,
-          message: cursor
-            ? 'Nothing new has been said since the last analysis.'
-            : 'This session has no captions yet.',
+          message:
+            cursor && !fromStart
+              ? 'Nothing new has been said since the last analysis. To read it all again, tick "Read the whole session again".'
+              : 'This session has no captions yet.',
         };
       }
       const recent = rows.slice(-MAX_LINES);
@@ -209,7 +216,7 @@ export class CallsToActionService {
         read: lines.length,
         message: added.length
           ? `${added.length} ${added.length === 1 ? 'call to action' : 'calls to action'} suggested from ${lines.length} lines.`
-          : `No calls to action in the ${lines.length} new lines.`,
+          : `No calls to action in the ${lines.length} ${fromStart ? '' : 'new '}lines.`,
       };
     } finally {
       this.running.delete(sessionId);

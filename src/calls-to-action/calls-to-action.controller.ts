@@ -7,7 +7,9 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
+import { ApiQuery } from '@nestjs/swagger';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/strategies/jwt.stategies';
 import { Audit } from '../common/decorators/audit.decorator';
@@ -63,8 +65,16 @@ export class CallsToActionController {
     summary:
       'Read what the session has said since its last analysis and suggest its calls to action',
   })
-  analyse(@Param('id', ParseUUIDPipe) id: string) {
-    return this.calls.analyse(id);
+  @ApiQuery({
+    name: 'fromStart',
+    required: false,
+    description: 'true reads the whole session again, not only what is new',
+  })
+  analyse(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('fromStart') fromStart?: string,
+  ) {
+    return this.calls.analyse(id, fromStart === 'true');
   }
 
   @Post('editions/:id/calls-to-action')
