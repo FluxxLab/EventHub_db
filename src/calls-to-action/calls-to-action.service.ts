@@ -29,6 +29,8 @@ import { ClaudeDeckDesigner, type DeckImage } from './deck/deck-designer';
 /** Images larger than this are not shown to Claude (its limit is 5 MB). */
 const MAX_IMAGE_BYTES = 3_500_000;
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+/** Brand guides larger than this are not sent (Claude reads PDFs up to 32 MB). */
+const MAX_GUIDE_BYTES = 24_000_000;
 
 /** "8 – 9 Sept 2026", as the deck's cover shows the dates. */
 export function deckDates(startsAt: Date, endsAt: Date): string {
@@ -116,7 +118,10 @@ export class CallsToActionService {
     reason: string | null;
     brandColor: string | null;
     logo: DeckImage | null;
+    logoDark: DeckImage | null;
     cover: DeckImage | null;
+    /** Whether the event's brand guide was read for this design. */
+    guided: boolean;
   }> {
     if (!scope.sessionId === !scope.day) {
       throw new BadRequestException(
@@ -151,9 +156,11 @@ export class CallsToActionService {
           : `Day ${scope.day} has no approved calls to action yet.`,
       );
     }
-    const [logo, cover] = await Promise.all([
+    const [logo, logoDark, cover, guide] = await Promise.all([
       this.image(edition.logoImage, 'logo'),
+      this.image(edition.logoDarkImage, 'logo for dark backgrounds'),
       this.image(edition.coverImage, 'cover'),
+      this.pdf(edition.brandGuide),
     ]);
     const { answer, reason } = await this.designer.design(
       {
@@ -181,9 +188,10 @@ export class CallsToActionService {
             (c.sessionId && sessionsOf.get(c.sessionId)?.title) || 'No session',
         })),
       },
-      [logo, cover].filter(
+      [logo, logoDark, cover].filter(
         (i): i is DeckImage => !!i && i.data.length * 0.75 <= MAX_IMAGE_BYTES,
       ),
+      guide,
     );
     return {
       design: answer
@@ -196,8 +204,25 @@ export class CallsToActionService {
       reason,
       brandColor: edition.brandColor,
       logo,
+      logoDark,
       cover,
+      guided: !!guide && !!answer,
     };
+  }
+
+  /** The event's brand guide as base64, or null when there is none, it is too large, or it cannot be read. */
+  private async pdf(stored: string | null): Promise<string | null> {
+    try {
+      const url = await this.storage.resolveStoredUrl(stored);
+      if (!url) return null;
+      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      const type = res.headers.get('content-type')?.split(';')[0].trim() ?? '';
+      if (!res.ok || type !== 'application/pdf') return null;
+      const bytes = Buffer.from(await res.arrayBuffer());
+      return bytes.length <= MAX_GUIDE_BYTES ? bytes.toString('base64') : null;
+    } catch {
+      return null;
+    }
   }
 
   /** A stored image as base64, or null when there is none or it cannot be read. */

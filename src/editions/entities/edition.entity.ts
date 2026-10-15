@@ -259,6 +259,20 @@ export class Edition {
   @Column({ type: 'varchar', length: 512, nullable: true })
   logoImage: string | null;
 
+  /** The logo drawn for dark backgrounds (white wordmark): a key in the logos' folder. */
+  @Column({ type: 'varchar', length: 512, nullable: true })
+  logoDarkImage: string | null;
+
+  /**
+   * The event's brand guide, a PDF the call-to-action decks are designed
+   * from (colours, fonts, how the logo is used), and its file name.
+   */
+  @Column({ type: 'varchar', length: 512, nullable: true })
+  brandGuide: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  brandGuideName: string | null;
+
   /**
    * The event's button colour in the app (`#rrggbb`), or null for PIC navy.
    * The app picks white or black text on it for contrast.

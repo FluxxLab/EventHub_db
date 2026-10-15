@@ -1,10 +1,12 @@
 import {
   cleanDesign,
   cleanSvg,
+  font,
   hex,
   type DeckDesignAnswer,
 } from './deck-design';
 import { deckDates } from '../calls-to-action.service';
+import { brandAssetPattern } from '../../editions/dto/edition-brand.dto';
 
 const shape = (
   over: Partial<DeckDesignAnswer['decor']['cover'][number]> = {},
@@ -118,6 +120,27 @@ describe('deck design', () => {
       ),
     ).toBeNull();
     expect(cleanSvg('<svg viewBox="0 0 800 600"><rect/></svg>')).toBeNull(); // wrong canvas
+  });
+
+  it("takes the brand guide's own fonts by name, and nothing that is not a font name", () => {
+    expect(font('Montserrat', 'Calibri')).toBe('Montserrat');
+    expect(font('  Funnel   Display ', 'Calibri')).toBe('Funnel Display');
+    expect(font('<script>', 'Calibri')).toBe('Calibri');
+    expect(font('', 'Arial Black')).toBe('Arial Black');
+  });
+
+  it('keeps each brand upload to its own folder', () => {
+    const id = '7d3c2f0e-5b1a-4c55-9a0e-2f9c7a1b6d44';
+    expect(brandAssetPattern('guide').test(`edition-brand-guides/${id}`)).toBe(
+      true,
+    );
+    expect(brandAssetPattern('guide').test(`edition-logos/${id}`)).toBe(false);
+    expect(brandAssetPattern('logo-dark').test(`edition-logos/${id}`)).toBe(
+      true,
+    );
+    expect(brandAssetPattern('logo-dark').test(`edition-covers/${id}`)).toBe(
+      false,
+    );
   });
 
   it('writes the dates as the cover shows them', () => {

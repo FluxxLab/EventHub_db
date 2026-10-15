@@ -19,6 +19,12 @@ import { BrowseEditionsDto } from './dto/browse-editions.dto';
 import { EDITION_COVER_FOLDER } from './dto/edition-cover.dto';
 import { EDITION_LOGO_FOLDER } from './dto/edition-logo.dto';
 import {
+  BRAND_ASSET_FOLDER,
+  BRAND_ASSET_TYPES,
+  brandAssetPattern,
+  type BrandAsset,
+} from './dto/edition-brand.dto';
+import {
   CreateEditionDto,
   EditionInfoDto,
   UpdateEditionDto,
@@ -806,7 +812,12 @@ export class EditionsService {
    * URLs the console can show (uploads are stored as keys).
    */
   async list(): Promise<
-    (Edition & { coverUrl: string | null; logoUrl: string | null })[]
+    (Edition & {
+      coverUrl: string | null;
+      logoUrl: string | null;
+      logoDarkUrl: string | null;
+      brandGuideUrl: string | null;
+    })[]
   > {
     const rows = await this.editions.find({ order: { startsAt: 'DESC' } });
     return Promise.all(
@@ -814,9 +825,74 @@ export class EditionsService {
         Object.assign(e, {
           coverUrl: await this.storage.resolveStoredUrl(e.coverImage),
           logoUrl: await this.storage.resolveStoredUrl(e.logoImage),
+          logoDarkUrl: await this.storage.resolveStoredUrl(e.logoDarkImage),
+          brandGuideUrl: await this.storage.resolveStoredUrl(e.brandGuide),
         }),
       ),
     );
+  }
+
+  /** A signed upload URL for a brand asset: the dark-background logo (an image) or the guide (a PDF). */
+  async presignBrandAsset(id: string, asset: BrandAsset, contentType: string) {
+    if (!BRAND_ASSET_TYPES[asset].includes(contentType)) {
+      throw new BadRequestException(
+        asset === 'guide'
+          ? 'The brand guide must be a PDF.'
+          : 'The logo must be a JPEG, PNG or WebP image.',
+      );
+    }
+    await this.findById(id);
+    return this.storage.presignUpload({
+      folder: BRAND_ASSET_FOLDER[asset],
+      contentType,
+    });
+  }
+
+  /** Set or replace a brand asset, like `setLogo`: saved first, then the old upload deleted. */
+  async setBrandAsset(
+    id: string,
+    asset: BrandAsset,
+    key: string,
+    name?: string,
+  ): Promise<{ url: string | null; name: string | null }> {
+    const next = key.trim();
+    if (!brandAssetPattern(asset).test(next)) {
+      throw new BadRequestException(
+        'That upload is not for this part of the brand kit.',
+      );
+    }
+    const edition = await this.findById(id);
+    const previous =
+      asset === 'guide' ? edition.brandGuide : edition.logoDarkImage;
+    if (asset === 'guide') {
+      edition.brandGuide = next;
+      edition.brandGuideName = name?.trim() || 'Brand guide.pdf';
+    } else {
+      edition.logoDarkImage = next;
+    }
+    await this.editions.save(edition);
+    if (previous && previous !== next)
+      await this.dropObject(previous, BRAND_ASSET_FOLDER[asset]);
+    return {
+      url: await this.storage.resolveStoredUrl(next),
+      name: asset === 'guide' ? edition.brandGuideName : null,
+    };
+  }
+
+  /** Remove a brand asset. Idempotent. */
+  async removeBrandAsset(id: string, asset: BrandAsset): Promise<void> {
+    const edition = await this.findById(id);
+    const previous =
+      asset === 'guide' ? edition.brandGuide : edition.logoDarkImage;
+    if (!previous) return;
+    if (asset === 'guide') {
+      edition.brandGuide = null;
+      edition.brandGuideName = null;
+    } else {
+      edition.logoDarkImage = null;
+    }
+    await this.editions.save(edition);
+    await this.dropObject(previous, BRAND_ASSET_FOLDER[asset]);
   }
 
   /**
@@ -859,6 +935,10 @@ export class EditionsService {
       await this.dropObject(edition.coverImage, EDITION_COVER_FOLDER);
     if (edition.logoImage)
       await this.dropObject(edition.logoImage, EDITION_LOGO_FOLDER);
+    if (edition.logoDarkImage)
+      await this.dropObject(edition.logoDarkImage, EDITION_LOGO_FOLDER);
+    if (edition.brandGuide)
+      await this.dropObject(edition.brandGuide, BRAND_ASSET_FOLDER.guide);
   }
 
   async findById(id: string): Promise<Edition> {

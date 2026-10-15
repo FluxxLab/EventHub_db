@@ -11,7 +11,7 @@ import {
 
 /** An image Claude can look at: the event's logo or cover. */
 export type DeckImage = {
-  label: 'logo' | 'cover';
+  label: 'logo' | 'logo for dark backgrounds' | 'cover';
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
   data: string;
 };
@@ -44,6 +44,8 @@ export class ClaudeDeckDesigner {
   async design(
     brief: DeckBrief,
     images: DeckImage[],
+    /** The event's brand guide as base64 PDF, when it has one. */
+    guide: string | null = null,
   ): Promise<{ answer: DeckDesignAnswer | null; reason: string | null }> {
     if (!this.client)
       return { answer: null, reason: 'The AI is not set up on the server.' };
@@ -58,6 +60,19 @@ export class ClaudeDeckDesigner {
           {
             role: 'user',
             content: [
+              ...(guide
+                ? [
+                    {
+                      type: 'document' as const,
+                      title: 'Brand guide',
+                      source: {
+                        type: 'base64' as const,
+                        media_type: 'application/pdf' as const,
+                        data: guide,
+                      },
+                    },
+                  ]
+                : []),
               ...images.map((img) => ({
                 type: 'image' as const,
                 source: {
@@ -69,7 +84,7 @@ export class ClaudeDeckDesigner {
               {
                 type: 'text' as const,
                 text: designPrompt(
-                  brief,
+                  { ...brief, guide: !!guide },
                   images.map((i) => `the event's ${i.label}`),
                 ),
               },
