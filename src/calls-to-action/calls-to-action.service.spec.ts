@@ -187,6 +187,19 @@ describe('calls to action', () => {
     expect(result.message).toBe('No calls to action in the 1 new lines.');
   });
 
+  it('reads the whole session again when asked to', async () => {
+    const { service, read } = setup({
+      cursor: at(9),
+      rows: [
+        { s: 1, text: 'first' },
+        { s: 5, text: 'second' },
+      ],
+    });
+    const result = await service.analyse(SESSION, true);
+    expect(read[0].map((l) => l.text)).toEqual(['first', 'second']);
+    expect(result.message).toBe('No calls to action in the 2 lines.');
+  });
+
   it('says so when nothing new was said, without asking the AI', async () => {
     const { service, read } = setup({
       cursor: at(9),
@@ -194,7 +207,9 @@ describe('calls to action', () => {
     });
     await expect(service.analyse(SESSION)).resolves.toMatchObject({
       read: 0,
-      message: 'Nothing new has been said since the last analysis.',
+      message: expect.stringContaining(
+        'Nothing new has been said since the last analysis.',
+      ) as unknown,
     });
     expect(read).toHaveLength(0);
   });
