@@ -25,6 +25,8 @@ import { CallToAction } from './entities/call-to-action.entity';
 import { SessionAnalysis } from './entities/session-analysis.entity';
 import { cleanDesign, type DeckDesign } from './deck/deck-design';
 import { ClaudeDeckDesigner, type DeckImage } from './deck/deck-designer';
+import { cleanReport } from './report/rapporteur-report';
+import { ClaudeRapporteurWriter } from './report/rapporteur-writer';
 
 /** Images larger than this are not shown to Claude (its limit is 5 MB). */
 const MAX_IMAGE_BYTES = 3_500_000;
@@ -101,7 +103,73 @@ export class CallsToActionService {
     private readonly dataSource: DataSource,
     private readonly designer: ClaudeDeckDesigner,
     private readonly storage: StorageService,
+    private readonly rapporteur: ClaudeRapporteurWriter,
   ) {}
+
+  /**
+   * The session's rapporteur report, written by Claude from its whole named
+   * transcript and its approved calls to action, for the console to fill into
+   * the Word template. With the session's details for the report's header.
+   */
+  async writeReport(sessionId: string) {
+    if (!this.rapporteur.configured) {
+      throw new ServiceUnavailableException(
+        "AI reports aren't set up yet. Ask your administrator.",
+      );
+    }
+    const session = await this.sessions.findById(sessionId);
+    if (!session.editionId) {
+      throw new BadRequestException('This session belongs to no event.');
+    }
+    const edition = await this.editions.findById(session.editionId);
+    const rows = (await this.captions.fullTranscript(sessionId, 'en')).slice(
+      -MAX_LINES,
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException(
+        'This session has no captions yet, so there is nothing to report on.',
+      );
+    }
+    const time = (d: Date) => d.toISOString().slice(11, 19);
+    const transcript = rows
+      .map((r) => `${time(r.createdAt)} ${whoSaid(r) ?? 'Unknown'}: ${r.text}`)
+      .join('\n');
+    const approved = await this.calls.find({
+      where: { sessionId, status: 'approved' },
+      order: { createdAt: 'ASC' },
+    });
+    const { report, reason } = await this.rapporteur.write(
+      {
+        event: edition.name,
+        session: session.title,
+        description: session.description?.trim() || null,
+        speakers: (session.speakers ?? []).map((s) =>
+          s.organisation ? `${s.name} (${s.organisation})` : s.name,
+        ),
+        calls: approved.map((c) => ({
+          type: c.type,
+          action: c.action,
+          directedAt: c.directedAt,
+          proposedBy: c.proposedBy,
+          deadline: c.deadline,
+          amount: c.amount,
+        })),
+      },
+      transcript,
+    );
+    if (!report) throw new ServiceUnavailableException(reason);
+    return {
+      report: cleanReport(report),
+      event: edition.name,
+      session: {
+        title: session.title,
+        startsAt: session.startsAt,
+        endsAt: session.endsAt,
+        room: session.room ?? null,
+      },
+      read: rows.length,
+    };
+  }
 
   /**
    * A fresh design for the event's call-to-action deck: Claude reads the

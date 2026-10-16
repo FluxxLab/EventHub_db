@@ -118,6 +118,14 @@ export const EDITION_FEATURES = [
 ] as const;
 export type EditionFeature = (typeof EDITION_FEATURES)[number];
 
+/**
+ * How the console makes call-to-action decks for the event: `designed` has
+ * Claude design one from the event's brand each time; `build` uses the Build
+ * conference's commitment template (cover, cards or table, closing).
+ */
+export const DECK_TEMPLATES = ['designed', 'build'] as const;
+export type DeckTemplate = (typeof DECK_TEMPLATES)[number];
+
 /** What a fresh edition gets; must match the column default in the migration. */
 export const DEFAULT_EDITION_FEATURES: EditionFeature[] = [
   'schedule',
@@ -279,6 +287,10 @@ export class Edition {
    */
   @Column({ type: 'varchar', length: 7, nullable: true })
   brandColor: string | null;
+
+  /** The look of its call-to-action decks (see DECK_TEMPLATES). */
+  @Column({ type: 'varchar', length: 20, default: 'designed' })
+  deckTemplate: DeckTemplate;
 
   /** The paragraph on the app's details page. */
   @Column({ type: 'text', nullable: true })

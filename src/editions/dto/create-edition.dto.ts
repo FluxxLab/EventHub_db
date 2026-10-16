@@ -22,6 +22,8 @@ import { BRAND_COLOR_PATTERN } from './edition-logo.dto';
 import {
   AUTOMATIC_NOTIFICATIONS,
   CentreAction,
+  DECK_TEMPLATES,
+  type DeckTemplate,
   EDITION_FEATURES,
   EditionCategory,
   EditionStatus,
@@ -230,6 +232,15 @@ export class CreateEditionDto {
     message: 'brandColor must be a colour like #0f6b3a',
   })
   brandColor?: string | null;
+
+  @ApiPropertyOptional({
+    enum: DECK_TEMPLATES,
+    description:
+      "The look of the event's call-to-action decks: designed from its brand each time, or the Build commitment template.",
+  })
+  @IsOptional()
+  @IsIn(DECK_TEMPLATES)
+  deckTemplate?: DeckTemplate;
 
   @ApiPropertyOptional({ description: 'Shown on the app details page' })
   @IsOptional()

@@ -1,4 +1,13 @@
-import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  cleanReport,
+  type RapporteurReportAnswer,
+} from './report/rapporteur-report';
+import type { ClaudeRapporteurWriter } from './report/rapporteur-writer';
+import {
+  BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 import type { CaptionsService } from '../captions/captions.service';
 import type { EditionsService } from '../editions/editions.service';
@@ -52,6 +61,8 @@ function setup(
       mic?: number | null;
     }[];
     stored?: Partial<CallToAction>[];
+    /** What the rapporteur writer answers. */
+    report?: { report: RapporteurReportAnswer | null; reason: string | null };
   } = {},
 ) {
   const saved: Partial<CallToAction>[] = [];
@@ -128,6 +139,12 @@ function setup(
       }),
     ),
   } as unknown as DataSource;
+  const rapporteur = {
+    configured: opts.configured !== false,
+    write: jest.fn(() =>
+      Promise.resolve(opts.report ?? { report: report(), reason: null }),
+    ),
+  } as unknown as ClaudeRapporteurWriter;
   const service = new CallsToActionService(
     calls,
     analyses,
@@ -138,8 +155,17 @@ function setup(
     dataSource,
     {} as never, // the deck designer: not used here
     {} as never, // storage: not used here
+    rapporteur,
   );
-  return { service, saved, read, ai, updates, analysis: () => analysis };
+  return {
+    service,
+    saved,
+    read,
+    ai,
+    updates,
+    rapporteur,
+    analysis: () => analysis,
+  };
 }
 
 describe('calls to action', () => {
@@ -281,5 +307,87 @@ describe('cleaning what the model found', () => {
     const out = cleanFound(items, 3);
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ proposedBy: null, line: 0 });
+  });
+});
+
+/** A report as the writer answers it. */
+function report(
+  over: Partial<RapporteurReportAnswer> = {},
+): RapporteurReportAnswer {
+  return {
+    purpose: 'How public data can serve inclusion.',
+    attendees: 'Dr Amina Bello (NBS)',
+    insights: [
+      {
+        insight: 'Open data is under-used.',
+        whyItMatters: 'Startups cannot build without it.',
+        evidence: 'Two datasets cited.',
+        implications: 'Publish more.',
+      },
+    ],
+    perspectives: ['Privacy against openness.'],
+    opportunities: [],
+    challenges: [],
+    recommendations: [],
+    commitments: [],
+    synthesis: 'A focused session on data.',
+    ...over,
+  };
+}
+
+describe('rapporteur report', () => {
+  it('writes from the named transcript and the approved calls', async () => {
+    const { service, rapporteur } = setup({
+      rows: [{ s: 0, text: 'We will publish the census data.', mic: 1 }],
+    });
+    const out = await service.writeReport(SESSION);
+    expect(out.report.purpose).toBe('How public data can serve inclusion.');
+    expect(out.event).toBe('Build 2026');
+    expect(out.session.title).toBe('Data for inclusion');
+    const [brief, transcript] = (rapporteur.write as jest.Mock).mock
+      .calls[0] as [unknown, string];
+    expect(brief).toMatchObject({ session: 'Data for inclusion', calls: [] });
+    expect(transcript).toContain('Mic 1: We will publish the census data.');
+  });
+
+  it('refuses a session with nothing said, and says why the AI could not answer', async () => {
+    await expect(setup().service.writeReport(SESSION)).rejects.toThrow(
+      BadRequestException,
+    );
+    const { service } = setup({
+      rows: [{ s: 0, text: 'Hello.' }],
+      report: { report: null, reason: 'The AI is busy right now.' },
+    });
+    await expect(service.writeReport(SESSION)).rejects.toThrow(
+      'The AI is busy right now.',
+    );
+  });
+
+  it('tidies cells, fills the unsaid and drops empty rows', () => {
+    const out = cleanReport(
+      report({
+        attendees: '  ',
+        perspectives: ['- One  view', ' ', 'Two', 'Three', 'Four'],
+        recommendations: [
+          {
+            recommendation: 'Fund it',
+            owner: '',
+            nextStep: 'Draft a bill',
+            timeframe: ' ',
+          },
+          { recommendation: ' ', owner: 'x', nextStep: 'y', timeframe: 'z' },
+        ],
+      }),
+    );
+    expect(out.attendees).toBe('Not stated');
+    expect(out.perspectives).toEqual(['One view', 'Two', 'Three']);
+    expect(out.recommendations).toEqual([
+      {
+        recommendation: 'Fund it',
+        owner: 'Not stated',
+        nextStep: 'Draft a bill',
+        timeframe: 'Not stated',
+      },
+    ]);
   });
 });

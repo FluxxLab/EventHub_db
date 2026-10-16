@@ -78,6 +78,22 @@ export class CallsToActionController {
     return this.calls.analyse(id, fromStart === 'true');
   }
 
+  @Post('sessions/:id/rapporteur-report')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'session' })
+  @Audit({
+    type: 'session_report_written',
+    description: 'Rapporteur report written from a session transcript',
+  })
+  @ApiOperation({
+    summary:
+      "The session's rapporteur report (insights, perspectives, opportunities, challenges, recommendations, commitments, synthesis), written by AI from its transcript",
+  })
+  writeReport(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.writeReport(id);
+  }
+
   @Post('editions/:id/calls-to-action/deck-design')
   @HttpCode(200)
   @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
