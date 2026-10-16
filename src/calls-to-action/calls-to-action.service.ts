@@ -311,6 +311,20 @@ export class CallsToActionService {
     }
   }
 
+  /**
+   * The event's logos as images, for the template decks the console draws
+   * itself (cards or a table): fetched here because storage does not serve
+   * the console's origin. Either is null when the event has none.
+   */
+  async deckImages(editionId: string) {
+    const edition = await this.editions.findById(editionId);
+    const [logo, logoDark] = await Promise.all([
+      this.image(edition.logoImage, 'logo'),
+      this.image(edition.logoDarkImage, 'logo for dark backgrounds'),
+    ]);
+    return { logo, logoDark };
+  }
+
   /** The event's calls to action, with where each session's analysis has got to. */
   async list(editionId: string) {
     await this.editions.findById(editionId);

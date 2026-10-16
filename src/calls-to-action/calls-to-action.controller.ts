@@ -94,6 +94,17 @@ export class CallsToActionController {
     return this.calls.writeReport(id);
   }
 
+  @Get('editions/:id/calls-to-action/deck-images')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      "The event's logo and dark-background logo as images, for the template decks",
+  })
+  deckImages(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.deckImages(id);
+  }
+
   @Post('editions/:id/calls-to-action/deck-design')
   @HttpCode(200)
   @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
