@@ -27,6 +27,8 @@ import {
   EDITION_FEATURES,
   EditionCategory,
   EditionStatus,
+  SPEAKER_NAMING,
+  type SpeakerNaming,
 } from '../entities/edition.entity';
 
 /* ------------------------------------------------ help-screen info (nested) */
@@ -241,6 +243,15 @@ export class CreateEditionDto {
   @IsOptional()
   @IsIn(DECK_TEMPLATES)
   deckTemplate?: DeckTemplate;
+
+  @ApiPropertyOptional({
+    enum: SPEAKER_NAMING,
+    description:
+      'How far captions go in naming speakers from what they hear: off, programme (only names on the programme are applied) or everyone (other names are suggested too).',
+  })
+  @IsOptional()
+  @IsIn(SPEAKER_NAMING)
+  speakerNaming?: SpeakerNaming;
 
   @ApiPropertyOptional({ description: 'Shown on the app details page' })
   @IsOptional()

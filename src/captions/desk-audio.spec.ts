@@ -19,6 +19,21 @@ describe('a desk starting a multi-mic room', () => {
     expect(deskAudio(pcm(32))?.channels).toBe(32);
   });
 
+  it('takes 2 to 32 mics of 16 kHz mu-law too', () => {
+    const mulaw = (channels: unknown, sampleRate = 16_000) => ({
+      room: 'Hall A',
+      audio: { encoding: 'mulaw', sampleRate, channels },
+    });
+    expect(deskAudio(mulaw(8))).toEqual({
+      encoding: 'mulaw',
+      sampleRate: 16_000,
+      channels: 8,
+    });
+    expect(deskAudio(mulaw(1))).toBeUndefined();
+    expect(deskAudio(mulaw(33))).toBeUndefined();
+    expect(deskAudio(mulaw(4, 8_000))).toBeUndefined();
+  });
+
   it('treats one channel, too many, or another format as WebM', () => {
     expect(deskAudio(pcm(1))).toBeUndefined();
     expect(deskAudio(pcm(33))).toBeUndefined();

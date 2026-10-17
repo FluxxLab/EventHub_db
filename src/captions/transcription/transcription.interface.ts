@@ -23,16 +23,22 @@ export interface TranscriptionStream {
 }
 
 /**
- * Headerless audio: signed 16-bit little-endian PCM. Nothing in the bytes says
- * what they are, so the provider has to be told - unlike a desk's WebM, which
- * carries its own header (and so needs a fresh recording after a reopen; raw
- * audio does not).
+ * Headerless audio: signed 16-bit little-endian PCM, or 8-bit G.711 mu-law (a
+ * multi-mic desk on a thin link sends half the bytes). Nothing in the bytes
+ * says what they are, so the provider has to be told - unlike a desk's WebM,
+ * which carries its own header (and so needs a fresh recording after a
+ * reopen; raw audio does not).
  */
 export interface RawAudioFormat {
-  encoding: 'linear16';
+  encoding: 'linear16' | 'mulaw';
   sampleRate: number;
   /** 1 for a mixed feed; one per mic when the sound desk sends each mic on its own channel. */
   channels: number;
+}
+
+/** Bytes one sample of one channel takes: two for PCM, one for mu-law. */
+export function bytesPerSample(format: RawAudioFormat): number {
+  return format.encoding === 'mulaw' ? 1 : 2;
 }
 
 /** One speaker turn from a finished recording. */
@@ -42,9 +48,31 @@ export interface ArchiveUtterance {
   /** Milliseconds from the start of the recording, so the archive transcript
    *  can be ordered and seeked even though the rows are written at once. */
   offsetMs: number;
+  /** Milliseconds from the start of the recording to the turn's last word. */
+  endMs?: number;
+}
+
+/** One speaker turn from a recording fetched by URL, timed within it. */
+export interface UrlUtterance {
+  text: string;
+  speaker?: number;
+  /** Milliseconds from the start of the recording to the first word. */
+  startMs: number;
+  /** Milliseconds from the start of the recording to the last word's end. */
+  endMs: number;
 }
 
 export interface TranscriptionProvider {
+  /**
+   * Transcribe a recording the provider fetches itself (a presigned storage
+   * URL), with the same settings as archive(). Optional, like archive(): the
+   * fake provider has no batch API, and a desk back-fill fails without it.
+   */
+  transcribeUrl?(
+    url: string,
+    opts: { keywords: string[] },
+  ): Promise<UrlUtterance[]>;
+
   /**
    * Re-transcribe a finished recording at higher quality than the live pass.
    *

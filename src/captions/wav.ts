@@ -1,5 +1,8 @@
 import { open } from 'node:fs/promises';
-import type { RawAudioFormat } from './transcription/transcription.interface';
+import {
+  bytesPerSample as sampleBytes,
+  type RawAudioFormat,
+} from './transcription/transcription.interface';
 
 /** Size of the canonical PCM WAV header written by wavHeader. */
 export const WAV_HEADER_BYTES = 44;
@@ -11,14 +14,14 @@ export const WAV_HEADER_BYTES = 44;
  * this header, since raw PCM carries nothing else to go on.
  */
 export function wavHeader(format: RawAudioFormat): Buffer {
-  const bytesPerSample = 2; // linear16
+  const bytesPerSample = sampleBytes(format);
   const header = Buffer.alloc(WAV_HEADER_BYTES);
   header.write('RIFF', 0, 'ascii');
   header.writeUInt32LE(0, 4); // RIFF size, patched on close
   header.write('WAVE', 8, 'ascii');
   header.write('fmt ', 12, 'ascii');
   header.writeUInt32LE(16, 16); // fmt chunk size
-  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(format.encoding === 'mulaw' ? 7 : 1, 20); // PCM, or G.711 mu-law
   header.writeUInt16LE(format.channels, 22);
   header.writeUInt32LE(format.sampleRate, 24);
   header.writeUInt32LE(

@@ -12,12 +12,28 @@ export function micNames(
   session: Pick<Session, 'mics' | 'speakers'>,
 ): Map<number, string> {
   const names = new Map<number, string>();
+  for (const [mic, who] of micPeople(session)) names.set(mic, who.name);
+  return names;
+}
+
+/**
+ * micNames with the organisation too: the speaker's when one of the
+ * session's speakers holds the mic, none for a typed label.
+ */
+export function micPeople(
+  session: Pick<Session, 'mics' | 'speakers'>,
+): Map<number, { name: string; organisation: string | null }> {
+  const people = new Map<
+    number,
+    { name: string; organisation: string | null }
+  >();
   for (const m of session.mics ?? []) {
     const speaker = m.speakerId
       ? session.speakers?.find((s) => s.id === m.speakerId)
       : undefined;
     const name = speaker?.name ?? m.label;
-    if (name) names.set(m.mic, name);
+    if (name)
+      people.set(m.mic, { name, organisation: speaker?.organisation ?? null });
   }
-  return names;
+  return people;
 }

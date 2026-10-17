@@ -126,6 +126,16 @@ export type EditionFeature = (typeof EDITION_FEATURES)[number];
 export const DECK_TEMPLATES = ['designed', 'build'] as const;
 export type DeckTemplate = (typeof DECK_TEMPLATES)[number];
 
+/**
+ * How far the captions go in naming who is speaking from what they hear:
+ * `off` never; `programme` applies a name on its own only when it is one of
+ * the session's programmed speakers (anyone else is left unnamed);
+ * `everyone` also suggests the names it hears that are not on the programme,
+ * for an operator to confirm. Operators can always name people by hand.
+ */
+export const SPEAKER_NAMING = ['off', 'programme', 'everyone'] as const;
+export type SpeakerNaming = (typeof SPEAKER_NAMING)[number];
+
 /** What a fresh edition gets; must match the column default in the migration. */
 export const DEFAULT_EDITION_FEATURES: EditionFeature[] = [
   'schedule',
@@ -291,6 +301,10 @@ export class Edition {
   /** The look of its call-to-action decks (see DECK_TEMPLATES). */
   @Column({ type: 'varchar', length: 20, default: 'designed' })
   deckTemplate: DeckTemplate;
+
+  /** How far captions go in naming speakers on their own (see SPEAKER_NAMING). */
+  @Column({ type: 'varchar', length: 16, default: 'programme' })
+  speakerNaming: SpeakerNaming;
 
   /** The paragraph on the app's details page. */
   @Column({ type: 'text', nullable: true })
