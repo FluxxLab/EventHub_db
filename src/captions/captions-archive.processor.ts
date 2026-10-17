@@ -4,15 +4,69 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Job } from 'bullmq';
 import { unlink } from 'node:fs/promises';
 import { Repository } from 'typeorm';
+import { isCovered } from './backfill/backfill-plan';
+import { seqOf } from './captions.service';
 import { TranscriptSegment } from './entities/transcript-segment.entity';
 import { TRANSCRIPTION_PROVIDER } from './transcription/transcription.interface';
-import type { TranscriptionProvider } from './transcription/transcription.interface';
+import type {
+  ArchiveUtterance,
+  TranscriptionProvider,
+} from './transcription/transcription.interface';
 import { GLOSSARY } from './translation/glossary';
 
-interface ArchiveJob {
+export interface ArchiveJob {
   sessionId: string;
   room: string;
   path: string;
+  /**
+   * Wall-clock start of the recording (ISO), so each archived line gets an
+   * absolute time. Absent on jobs queued before it was sent.
+   */
+  startedAt?: string;
+}
+
+/**
+ * The rows an archive pass writes, given the back-filled lines the session
+ * already has (seqOf times, ascending).
+ *
+ * With the recording's start known, each line is stamped with when it was
+ * said (start + offset) and no offset, like live and back-filled rows, and a
+ * line a desk has already back-filled is dropped rather than stored twice.
+ * Without it (an older job) the rows keep the offset and one shared
+ * createdAt, as before, and nothing can be compared.
+ */
+export function archiveRows(
+  job: Pick<ArchiveJob, 'sessionId' | 'room' | 'startedAt'>,
+  utterances: ArchiveUtterance[],
+  backfilled: number[],
+): Partial<TranscriptSegment>[] {
+  const start = job.startedAt ? Date.parse(job.startedAt) : NaN;
+  if (Number.isNaN(start)) {
+    return utterances.map((u) => ({
+      sessionId: job.sessionId,
+      room: job.room,
+      text: u.text,
+      speaker: u.speaker ?? null,
+      offsetMs: u.offsetMs,
+    }));
+  }
+  return utterances
+    .filter(
+      (u) =>
+        !isCovered(
+          backfilled,
+          start + u.offsetMs,
+          start + (u.endMs ?? u.offsetMs),
+        ),
+    )
+    .map((u) => ({
+      sessionId: job.sessionId,
+      room: job.room,
+      text: u.text,
+      speaker: u.speaker ?? null,
+      offsetMs: null,
+      createdAt: new Date(start + u.offsetMs),
+    }));
 }
 
 /**
@@ -60,23 +114,28 @@ export class CaptionsArchiveProcessor extends WorkerHost {
        * Replace rather than append. The live rows are a draft of the same
        * speech, so keeping both would double every sentence in the export and
        * leave the digest reading it twice.
+       *
+       * Back-filled rows stay: they come from a desk's own recording of what
+       * never reached this server, so this recording does not have them.
        */
+      let written = 0;
       await this.segments.manager.transaction(async (manager) => {
-        await manager.delete(TranscriptSegment, { sessionId });
-        await manager.insert(
-          TranscriptSegment,
-          utterances.map((u) => ({
-            sessionId,
-            room,
-            text: u.text,
-            speaker: u.speaker ?? null,
-            offsetMs: u.offsetMs,
-          })),
-        );
+        await manager.delete(TranscriptSegment, { sessionId, backfill: false });
+        const backfilled = (
+          await manager.find(TranscriptSegment, {
+            where: { sessionId, language: 'en', backfill: true },
+            select: { createdAt: true, offsetMs: true },
+          })
+        )
+          .map(seqOf)
+          .sort((a, b) => a - b);
+        const rows = archiveRows(job.data, utterances, backfilled);
+        written = rows.length;
+        if (rows.length > 0) await manager.insert(TranscriptSegment, rows);
       });
 
       this.logger.log(
-        `archived ${utterances.length} utterance(s) for ${room} (${sessionId})`,
+        `archived ${written} utterance(s) for ${room} (${sessionId})`,
       );
     } catch (error) {
       // The live transcript is still there. A failed archive is a downgrade,

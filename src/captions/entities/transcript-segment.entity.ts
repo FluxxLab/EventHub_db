@@ -73,12 +73,21 @@ export class TranscriptSegment {
    * Milliseconds from the start of the recording.
    *
    * Null for live segments, which arrive one at a time and are ordered by
-   * createdAt. The archive pass writes every row at once, so createdAt cannot
-   * order them - and an offset is more useful anyway, since it points at a
-   * position in the audio rather than at when the row was inserted.
+   * createdAt. Set only on rows archived before archive jobs carried the
+   * recording's start: those were written at once with one createdAt, so the
+   * offset orders them. Newer archived rows, like back-filled ones, have the
+   * absolute time in createdAt and a null offset.
    */
   @Column({ type: 'integer', nullable: true })
   offsetMs: number | null;
+
+  /**
+   * Written from a capture desk's own recording, uploaded after the fact to
+   * fill what the live captions missed (a dropped link). The archive pass
+   * replaces the live rows but keeps these: its recording never heard them.
+   */
+  @Column({ type: 'boolean', default: false })
+  backfill: boolean;
 
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;

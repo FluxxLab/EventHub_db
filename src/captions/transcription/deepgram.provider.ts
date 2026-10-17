@@ -9,6 +9,7 @@ import type {
   TranscriptEvent,
   TranscriptionProvider,
   TranscriptionStream,
+  UrlUtterance,
 } from './transcription.interface';
 import { ResilientStream, type CloseInfo } from './resilient-stream';
 
@@ -102,28 +103,62 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
   ): Promise<ArchiveUtterance[]> {
     const response = await this.client.listen.v1.media.transcribeFile(
       createReadStream(filePath),
-      {
-        model: 'nova-3',
-        language: 'en',
-        smart_format: true,
-        // Masked at the source here too, so the archive pass cannot restore
-        // words the live captions had already removed.
-        profanity_filter: true,
-        diarize_model: 'v2',
-        utterances: true,
-        keyterm: opts.keywords,
-      },
+      DeepTranscriptionProvider.batchOptions(opts.keywords),
     );
+    return DeepTranscriptionProvider.turns(response).map((u) => ({
+      text: u.text,
+      speaker: u.speaker,
+      offsetMs: u.startMs,
+      endMs: u.endMs,
+    }));
+  }
 
+  /**
+   * A desk's back-fill recording, read by Deepgram straight from storage, so
+   * the file never passes through this server. Same settings as archive().
+   * The timeout is long because an hour of audio takes minutes to transcribe.
+   */
+  async transcribeUrl(
+    url: string,
+    opts: { keywords: string[] },
+  ): Promise<UrlUtterance[]> {
+    const response = await this.client.listen.v1.media.transcribeUrl(
+      { url, ...DeepTranscriptionProvider.batchOptions(opts.keywords) },
+      { timeoutInSeconds: 900 },
+    );
+    return DeepTranscriptionProvider.turns(response);
+  }
+
+  /** The pre-recorded settings both batch passes use. */
+  private static batchOptions(keywords: string[]) {
+    return {
+      model: 'nova-3' as const,
+      language: 'en',
+      smart_format: true,
+      // Masked at the source here too, so a batch pass cannot restore words
+      // the live captions had already removed.
+      profanity_filter: true,
+      diarize_model: 'v2' as const,
+      utterances: true,
+      keyterm: keywords,
+    };
+  }
+
+  /** The non-empty speaker turns of a pre-recorded response, timed in ms. */
+  private static turns(
+    response: Awaited<
+      ReturnType<DeepgramClient['listen']['v1']['media']['transcribeUrl']>
+    >,
+  ): UrlUtterance[] {
     const utterances =
       'results' in response ? (response.results.utterances ?? []) : [];
-
     return utterances
       .filter((u) => u.transcript && u.transcript.trim().length > 0)
       .map((u) => ({
         text: u.transcript as string,
         speaker: u.speaker,
-        offsetMs: Math.round((u.start ?? 0) * 1000),
+        startMs: Math.round((u.start ?? 0) * 1000),
+        endMs: Math.round((u.end ?? u.start ?? 0) * 1000),
       }));
   }
 

@@ -125,6 +125,18 @@ function build(redis = new FakeRedis(), settings: Record<string, string> = {}) {
   const session = { findLiveInRoom: jest.fn().mockResolvedValue({ id: 's1' }) };
   const realtime = { emitToRoom: jest.fn(), emitGlobal: jest.fn() };
   const archiveQueue = { add: jest.fn().mockResolvedValue({}) };
+  // No heard names: a line is named by its mic's label or not at all.
+  const speakerNames = {
+    runStarted: jest.fn().mockResolvedValue(undefined),
+    runEnded: jest.fn(),
+    onFinal: jest.fn().mockResolvedValue(undefined),
+    appliedFor: jest.fn().mockResolvedValue([]),
+    attributeNow: (
+      _sessionId: string,
+      _line: unknown,
+      label: { name: string; organisation: string | null } | null | undefined,
+    ) => label ?? { name: null, organisation: null },
+  };
   const service = new CaptionsService(
     segments as never,
     transcription,
@@ -134,6 +146,7 @@ function build(redis = new FakeRedis(), settings: Record<string, string> = {}) {
     session as never,
     realtime as never,
     redis as never,
+    speakerNames as never,
     {
       get: (key: string) =>
         settings[key] ?? (key === 'TRANSLATION_CONCURRENCY' ? '2' : undefined),
@@ -149,6 +162,7 @@ function build(redis = new FakeRedis(), settings: Record<string, string> = {}) {
     realtime,
     archiveQueue,
     session,
+    speakerNames,
     say: (event: TranscriptEvent) => onTranscript!(event),
   };
 }
@@ -301,10 +315,19 @@ describe('CaptionsService capture sources', () => {
     });
     const opts = t.transcription.openStream.mock.calls[0][0] as {
       audio?: unknown;
-      onReopen?: unknown;
+      onReopen?: () => void;
     };
     expect(opts.audio).toEqual(PCM);
-    expect(opts.onReopen).toBeUndefined();
+    // A reopen still restarts the voice numbering (speaker names hear of
+    // it), but raw PCM needs no fresh recording, so no desk is asked.
+    t.realtime.emitToRoom.mockClear();
+    opts.onReopen?.();
+    expect(t.realtime.emitToRoom).not.toHaveBeenCalledWith(
+      CAPTURE_DESKS_ROOM,
+      'capture:restart',
+      expect.anything(),
+    );
+    expect(t.speakerNames.runStarted).toHaveBeenLastCalledWith('Hall C', 's1');
     await t.service.stopRoom('Hall C');
   });
 
@@ -448,6 +471,12 @@ describe('CaptionsService transcribes only while a session is live', () => {
       'retranscribe',
       expect.objectContaining({ sessionId: 'panel-1', room: 'Hall F' }),
     );
+    // where the recording starts on the wall clock, for absolute line times
+    const [[, archived]] = t.archiveQueue.add.mock.calls as [
+      string,
+      { startedAt?: string },
+    ][];
+    expect(Number.isNaN(Date.parse(archived.startedAt ?? ''))).toBe(false);
 
     t.session.findLiveInRoom.mockResolvedValue({ id: 'panel-2' });
     await t.service.syncRoom('Hall F');

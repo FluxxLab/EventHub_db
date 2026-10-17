@@ -53,9 +53,10 @@ interface PendingCapture {
 const CAPTURE_RETRY_MS = 2_000;
 
 /**
- * A desk's raw multi-mic format, checked: 16 kHz 16-bit PCM with 2 to 32
- * channels, one per mic. Anything else is ignored and the desk is taken to be
- * sending WebM, as before.
+ * A desk's raw multi-mic format, checked: 16 kHz audio with 2 to 32 channels,
+ * one per mic, as 16-bit PCM or as 8-bit mu-law (half the bytes, for a weak
+ * link). Anything else is ignored and the desk is taken to be sending WebM, as
+ * before.
  */
 export function deskAudio(body: unknown): RawAudioFormat | undefined {
   const a = (
@@ -63,12 +64,16 @@ export function deskAudio(body: unknown): RawAudioFormat | undefined {
       audio?: { encoding?: unknown; sampleRate?: unknown; channels?: unknown };
     } | null
   )?.audio;
-  if (!a || a.encoding !== 'linear16' || a.sampleRate !== 16_000) {
+  if (
+    !a ||
+    (a.encoding !== 'linear16' && a.encoding !== 'mulaw') ||
+    a.sampleRate !== 16_000
+  ) {
     return undefined;
   }
   const channels = Number(a.channels);
   return Number.isInteger(channels) && channels >= 2 && channels <= 32
-    ? { encoding: 'linear16', sampleRate: 16_000, channels }
+    ? { encoding: a.encoding, sampleRate: 16_000, channels }
     : undefined;
 }
 

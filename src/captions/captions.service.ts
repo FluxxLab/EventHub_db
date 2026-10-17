@@ -12,9 +12,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RealtimeService, Rooms } from '../common/realtime/realtime.service';
 import { SessionsService } from '../sessions/sessions.service';
-import { micNames } from '../sessions/mic-names';
+import { micPeople } from '../sessions/mic-names';
 import { TranscriptSegment } from './entities/transcript-segment.entity';
-import { TRANSCRIPTION_PROVIDER } from './transcription/transcription.interface';
+import { effectiveTimeSql, seqOf } from './segment-time';
+import { SpeakerNamesService } from './speaker-names/speaker-names.service';
+import { attribute } from './speaker-names/speaker-naming-plan';
+import {
+  bytesPerSample,
+  TRANSCRIPTION_PROVIDER,
+} from './transcription/transcription.interface';
 import type {
   RawAudioFormat,
   TranscriptEvent,
@@ -96,6 +102,12 @@ interface HeldRoom {
    */
   preroll: { chunk: Buffer; at: number }[];
   prerollBytes: number;
+  /**
+   * When the first audio of the open transcription arrived (the pre-roll's,
+   * if any): the wall-clock moment its recording starts, so the archive pass
+   * can give each line an absolute time. Null while nothing is open.
+   */
+  firstAudioAt: number | null;
 }
 
 /**
@@ -109,7 +121,9 @@ function keepPreroll(
   windowMs: number,
   now: number,
 ): void {
-  const limit = (format.sampleRate * format.channels * 2 * windowMs) / 1000;
+  const limit =
+    (format.sampleRate * format.channels * bytesPerSample(format) * windowMs) /
+    1000;
   held.preroll.push({ chunk, at: now });
   held.prerollBytes += chunk.length;
   while (
@@ -156,8 +170,13 @@ export interface CaptionPayload {
   speaker?: number | null;
   /** The mic it was said into (1-based), when the room sends one mic per channel. */
   mic?: number | null;
-  /** Who is on that mic (Captions > Mics); null while nobody named it. */
+  /**
+   * Who said it: the name on its mic (Captions > Mics), else the name heard
+   * for its voice or mic (speaker-names); null while nobody is known.
+   */
   name?: string | null;
+  /** Their organisation, when known; never folded into the name. */
+  organisation?: string | null;
   /** When the English was said - also on translations of it. */
   at: string;
   /**
@@ -178,12 +197,8 @@ interface ReceivedEvent {
   seq: number;
 }
 
-/** A stored row's ordering key; archived rows share a createdAt, so add the offset. */
-export function seqOf(
-  row: Pick<TranscriptSegment, 'createdAt' | 'offsetMs'>,
-): number {
-  return row.createdAt.getTime() + (row.offsetMs ?? 0);
-}
+/** Row ordering lives in segment-time.ts; re-exported for the callers that import it from here. */
+export { effectiveTimeSql, seqOf };
 
 @Injectable()
 export class CaptionsService implements OnModuleInit, OnModuleDestroy {
@@ -240,7 +255,13 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
    */
   private readonly recordings = new Map<
     string,
-    { path: string; file: WriteStream; wav: boolean }
+    {
+      path: string;
+      file: WriteStream;
+      wav: boolean;
+      /** Wall-clock ms of the recording's first byte; null until one is written. */
+      startedAt: number | null;
+    }
   >();
 
   /**
@@ -306,6 +327,8 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     private readonly realtime: RealtimeService,
     @Inject(REDIS)
     private readonly redis: Redis,
+    /** Who the voices and mics are; told when a run opens and each final lands. */
+    private readonly speakerNames: SpeakerNamesService,
     config?: ConfigService,
   ) {
     this.lock = new CaptureLock(this.redis, this.instanceId);
@@ -410,6 +433,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       awaitingHeader: false,
       preroll: [],
       prerollBytes: 0,
+      firstAudioAt: null,
     });
     this.sources.set(roomKey(room), source);
     this.lastRefresh.set(room, Date.now());
@@ -444,6 +468,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
 
     const queue = this.pendingAudio.get(room);
     if (queue) {
+      held.firstAudioAt ??= now;
       queue.push(chunk);
       return;
     }
@@ -458,7 +483,11 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Written before the send, so a Deepgram failure cannot cost us the audio.
-    this.recordings.get(room)?.file.write(chunk);
+    const recording = this.recordings.get(room);
+    if (recording) {
+      recording.startedAt ??= held.firstAudioAt ?? now;
+      recording.file.write(chunk);
+    }
 
     try {
       stream.sendAudio(chunk);
@@ -513,7 +542,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
    * its name, and the speakers on stage with their organisations. Captions
    * never wait on this: if it cannot be read, the base terms are used.
    */
-  private async termsFor(sessionId: string): Promise<string[]> {
+  async termsFor(sessionId: string): Promise<string[]> {
     try {
       const session = await this.session.findById(sessionId);
       const [edition] = session.editionId
@@ -572,11 +601,13 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     this.lastSession.set(room, sessionId);
     // The pre-roll goes first, as if it had arrived while Deepgram connected.
     const since = Date.now() - this.prerollMs;
+    const preroll = held.preroll.splice(0).filter((p) => p.at >= since);
     this.pendingAudio.set(
       room,
-      held.preroll.splice(0).flatMap((p) => (p.at >= since ? [p.chunk] : [])),
+      preroll.map((p) => p.chunk),
     );
     held.prerollBytes = 0;
+    held.firstAudioAt = preroll[0]?.at ?? null;
     const isDesk = !held.audio;
     if (isDesk) {
       // The desk's recording is mid-container by now; ask for a new one.
@@ -594,21 +625,20 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
           keywords: await this.termsFor(sessionId),
           diarise: held.diarise,
           audio: held.audio,
-          // Raw PCM decodes from any byte, so only a desk needs restarting.
-          onReopen: isDesk
-            ? () => {
-                this.logger.warn(
-                  `transcription reopened (${room}); asking the capture desk for a fresh recording`,
-                );
-                const current = this.held.get(room);
-                if (current) current.awaitingHeader = true;
-                this.realtime.emitToRoom(
-                  CAPTURE_DESKS_ROOM,
-                  'capture:restart',
-                  { room },
-                );
-              }
-            : undefined,
+          onReopen: () => {
+            // The voice indexes start again from 0 with the new stream.
+            void this.speakerNames.runStarted(room, sessionId);
+            // Raw PCM decodes from any byte, so only a desk needs restarting.
+            if (!isDesk) return;
+            this.logger.warn(
+              `transcription reopened (${room}); asking the capture desk for a fresh recording`,
+            );
+            const current = this.held.get(room);
+            if (current) current.awaitingHeader = true;
+            this.realtime.emitToRoom(CAPTURE_DESKS_ROOM, 'capture:restart', {
+              room,
+            });
+          },
         },
         (event) => this.receive(room, event),
       );
@@ -624,6 +654,8 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     }
     this.activeRooms.set(room, stream);
     await this.startRecording(room, held.audio);
+    // Before the first line: the names it needs are loaded, the run's clock set.
+    await this.speakerNames.runStarted(room, sessionId);
     this.logger.log(`transcribing ${room} for session ${sessionId}`);
 
     const queued = this.pendingAudio.get(room) ?? [];
@@ -658,7 +690,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     );
     const file = createWriteStream(path);
     if (audio) file.write(wavHeader(audio));
-    this.recordings.set(room, { path, file, wav: !!audio });
+    this.recordings.set(room, { path, file, wav: !!audio, startedAt: null });
   }
 
   /** Deepgram closed and the recording handed to the archive pass; the room stays held. */
@@ -667,12 +699,14 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     const stream = this.activeRooms.get(room);
     this.activeRooms.delete(room);
     this.interims.clear(room);
+    this.speakerNames.runEnded(room);
     const held = this.held.get(room);
     if (held) {
       held.sessionId = null;
       held.awaitingHeader = false;
       held.preroll = [];
       held.prerollBytes = 0;
+      held.firstAudioAt = null;
     }
     await stream
       ?.close()
@@ -831,6 +865,11 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
         sessionId,
         room,
         path: recording.path,
+        // where offset 0 is on the wall clock, so archived lines get absolute
+        // times and sort among a desk's back-filled ones
+        ...(recording.startedAt !== null
+          ? { startedAt: new Date(recording.startedAt).toISOString() }
+          : {}),
       });
     } catch (error) {
       this.logger.warn(
@@ -920,7 +959,13 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
 
     const said = new Date(seq);
     const mic = event.channel === undefined ? null : event.channel + 1;
-    const name = mic === null ? null : (micNames(session).get(mic) ?? null);
+    const speaker = event.speaker ?? null;
+    // The mic's label if it has one, else the name heard for the voice or mic.
+    const { name, organisation } = this.speakerNames.attributeNow(
+      session.id,
+      { speaker, mic, at: seq },
+      mic === null ? null : micPeople(session).get(mic),
+    );
     const payload: CaptionPayload = {
       sessionId: session.id,
       // Second pass over Deepgram's own filter - see profanity.ts. The row
@@ -933,6 +978,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       speaker: event.speaker,
       mic,
       name,
+      organisation,
       at: said.toISOString(),
       seq,
     };
@@ -974,6 +1020,21 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       );
 
     this.lastSession.set(room, session.id);
+    // Once the row exists (the introduction job reads it back): is this line
+    // someone saying who they are, or who is next? Never awaited here.
+    void persisted.then((stored) => {
+      if (!stored) return;
+      return this.speakerNames.onFinal({
+        id: segmentId,
+        sessionId: session.id,
+        room,
+        text: event.text,
+        speaker,
+        mic,
+        language: 'en',
+        at: seq,
+      });
+    });
     // Captured before the current line is appended: the model needs what
     // came before, not the fragment it is already being given.
     const context = this.recentFinals.get(session.id) ?? [];
@@ -985,6 +1046,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       speaker: event.speaker,
       mic,
       name,
+      organisation,
       seq,
       segmentId,
       persisted,
@@ -1013,6 +1075,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     speaker: number | undefined;
     mic: number | null;
     name: string | null;
+    organisation: string | null;
     seq: number;
     segmentId: string;
     persisted: Promise<boolean>;
@@ -1061,6 +1124,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       speaker: number | undefined;
       mic: number | null;
       name: string | null;
+      organisation: string | null;
       seq: number;
       segmentId: string;
     },
@@ -1118,6 +1182,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
         speaker: line.speaker,
         mic: line.mic,
         name: line.name,
+        organisation: line.organisation,
         at: at.toISOString(),
         seq: line.seq,
       };
@@ -1338,16 +1403,12 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       speaker: number | null;
       mic: number | null;
       name: string | null;
+      organisation: string | null;
       at: Date;
       seq: number;
     }[]
   > {
-    // Served by idx_transcript_session_language_order (CaptionIndexes).
-    const rows = await this.segments.find({
-      where: { sessionId, language },
-      order: { offsetMs: 'DESC', createdAt: 'DESC' },
-      take: limit,
-    });
+    const rows = await this.orderedRows(sessionId, language, 'DESC', limit);
 
     // A translation this language is missing gets filled in the background,
     // never in this request. Filling it here meant a delegate's catch-up call
@@ -1361,21 +1422,60 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
 
     // seq matches what the live `caption` event carried for the same line,
     // so a client can merge history with lines that arrived meanwhile.
-    const names = await this.micNamesOf(sessionId);
+    const who = await this.attributor(sessionId);
     return rows.reverse().map((r) => ({
       text: maskProfanity(r.text),
       speaker: r.speaker,
       mic: r.mic,
-      name: r.mic === null ? null : (names.get(r.mic) ?? null),
+      ...who(r),
       at: r.createdAt,
       seq: seqOf(r),
     }));
   }
 
+  /**
+   * Who said each of a session's stored rows: the name on its mic, else the
+   * name heard for its voice or mic. One lookup of the session and its
+   * bindings, then a function to apply per row.
+   */
+  private async attributor(
+    sessionId: string,
+  ): Promise<
+    (
+      row: Pick<
+        TranscriptSegment,
+        'speaker' | 'mic' | 'createdAt' | 'offsetMs' | 'backfill'
+      >,
+    ) => { name: string | null; organisation: string | null }
+  > {
+    const [people, bindings] = await Promise.all([
+      this.micPeopleOf(sessionId),
+      this.speakerNames.appliedFor(sessionId).catch((error: Error) => {
+        this.logger.warn(
+          `speaker names for ${sessionId} not read: ${error.message}`,
+        );
+        return [];
+      }),
+    ]);
+    return (row) =>
+      attribute(
+        {
+          speaker: row.speaker,
+          mic: row.mic,
+          at: seqOf(row),
+          backfill: row.backfill,
+        },
+        row.mic === null ? null : people.get(row.mic),
+        bindings,
+      );
+  }
+
   /** Who is on each of the session's mics now; empty when it has none named (or is gone). */
-  private async micNamesOf(sessionId: string): Promise<Map<number, string>> {
+  private async micPeopleOf(
+    sessionId: string,
+  ): Promise<Map<number, { name: string; organisation: string | null }>> {
     try {
-      return micNames(await this.session.findById(sessionId));
+      return micPeople(await this.session.findById(sessionId));
     } catch {
       return new Map();
     }
@@ -1440,16 +1540,8 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     language: string,
   ): Promise<TranscriptSegment[]> {
     const [english, existing] = await Promise.all([
-      this.segments.find({
-        where: { sessionId, language: 'en' },
-        order: { offsetMs: 'DESC', createdAt: 'DESC' },
-        take: 60,
-      }),
-      this.segments.find({
-        where: { sessionId, language },
-        order: { offsetMs: 'DESC', createdAt: 'DESC' },
-        take: 60,
-      }),
+      this.orderedRows(sessionId, 'en', 'DESC', 60),
+      this.orderedRows(sessionId, language, 'DESC', 60),
     ]);
     if (english.length === 0) return [];
 
@@ -1498,6 +1590,9 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
                 // The English line's time, so this row sorts and de-dupes
                 // exactly where the English one does.
                 createdAt: source.createdAt,
+                // stays with its back-filled English when the archive pass
+                // replaces the rest
+                backfill: source.backfill,
               }),
             );
           } catch (error) {
@@ -1542,31 +1637,48 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
   async fullTranscript(
     sessionId: string,
     language = 'en',
-  ): Promise<(TranscriptSegment & { name: string | null })[]> {
-    const [rows, names] = await Promise.all([
+  ): Promise<
+    (TranscriptSegment & { name: string | null; organisation: string | null })[]
+  > {
+    const [rows, who] = await Promise.all([
       this.transcriptRows(sessionId, language),
-      this.micNamesOf(sessionId),
+      this.attributor(sessionId),
     ]);
-    return rows.map((r) => ({
-      ...r,
-      name: r.mic === null ? null : (names.get(r.mic) ?? null),
-    }));
+    return rows.map((r) => ({ ...r, ...who(r) }));
   }
 
   private transcriptRows(
     sessionId: string,
     language: string,
   ): Promise<TranscriptSegment[]> {
-    return this.segments.find({
-      where: { sessionId, language },
-      /**
-       * Archived rows carry an offset and are all written in one insert, so
-       * createdAt cannot order them. Live rows have a null offset and sort
-       * last under Postgres' ASC default, which is right: a session is
-       * either archived or it is not, never half of each.
-       */
-      order: { offsetMs: 'ASC', createdAt: 'ASC' },
-    });
+    return this.orderedRows(sessionId, language, 'ASC');
+  }
+
+  /**
+   * One session's rows in one language, by when they were said
+   * (effectiveTimeSql), then by createdAt.
+   *
+   * A session can now mix sources: archived lines (absolute createdAt since
+   * archive jobs carry the recording's start) and lines a desk back-filled
+   * later. Ordering by offset first, as before, would put every archived row
+   * ahead of every back-filled one. Sessions archived earlier share a single
+   * createdAt, so createdAt + offset still orders them by their offsets.
+   */
+  private orderedRows(
+    sessionId: string,
+    language: string,
+    direction: 'ASC' | 'DESC',
+    limit?: number,
+  ): Promise<TranscriptSegment[]> {
+    const qb = this.segments
+      .createQueryBuilder('seg')
+      .addSelect(effectiveTimeSql('seg'), 'effective_at')
+      .where('seg.sessionId = :sessionId', { sessionId })
+      .andWhere('seg.language = :language', { language })
+      .orderBy('effective_at', direction)
+      .addOrderBy('seg.createdAt', direction);
+    if (limit !== undefined) qb.limit(limit);
+    return qb.getMany();
   }
 
   /**
