@@ -178,7 +178,7 @@ export class SessionController {
 
   @Patch(':id/status')
   @ApiOperation({})
-  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
   @EditionScoped({ from: 'param', key: 'id', via: 'session' })
   @Audit({
     type: 'session_status_changed',

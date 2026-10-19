@@ -18,14 +18,14 @@ export class LiveOpsController {
   @ApiOperation({
     summary: 'Current broadcast flags - delegate apps fetch this on launch',
   })
-  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
   @EditionScoped({ from: 'current' })
   overview() {
     return this.service.overview();
   }
 
   @Post('cut-to-break')
-  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
   @EditionScoped({ from: 'current' })
   @Audit({
     type: 'cut-to-break',
@@ -45,7 +45,7 @@ export class LiveOpsController {
   }
 
   @Post('set-overlays')
-  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
   @EditionScoped({ from: 'current' })
   @Audit({ type: 'overlays_changed', description: 'Stream overlays changed' })
   @ApiOperation({ summary: 'Toggle captions / sign-language overlays' })
