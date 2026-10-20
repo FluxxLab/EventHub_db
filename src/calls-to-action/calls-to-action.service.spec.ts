@@ -17,7 +17,7 @@ import type {
   AnalysisProvider,
   FoundCallToAction,
 } from './analysis/analysis.provider';
-import { cleanFound } from './analysis/claude.provider';
+import { cleanFound, quoteLine } from './analysis/claude.provider';
 import { CallsToActionService } from './calls-to-action.service';
 import type { CallToAction } from './entities/call-to-action.entity';
 import type { SessionAnalysis } from './entities/session-analysis.entity';
@@ -307,15 +307,62 @@ describe('calls to action', () => {
 });
 
 describe('cleaning what the model found', () => {
-  it('drops items missing their action, target or quote, and lines out of range', () => {
+  const said = (...texts: string[]): AnalysisLine[] =>
+    texts.map((text, i) => ({ n: i + 1, at: at(i), who: null, text }));
+  const transcript = said(
+    'Good morning everyone.',
+    'Government must make disaggregated data mandatory.',
+    'Thank you.',
+  );
+
+  it('drops items missing their action, target or quote', () => {
     const items = [
-      { ...found(), proposedBy: '  ', line: 99 },
+      { ...found(), proposedBy: '  ' },
       { ...found(), directedAt: ' ' },
       { ...found(), quote: '' },
     ];
-    const out = cleanFound(items, 3);
+    const out = cleanFound(items, transcript);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ proposedBy: null, line: 0 });
+    expect(out[0]).toMatchObject({ proposedBy: null, line: 2 });
+  });
+
+  it('drops a call whose quote nobody said (drawn from the brief, say)', () => {
+    const invented = {
+      ...found(),
+      action: 'Invest in sovereign compute before 2030',
+      quote: 'Africa must invest in sovereign compute before 2030.',
+      line: 2,
+    };
+    expect(cleanFound([invented], transcript)).toEqual([]);
+  });
+
+  it('keeps a quote with tidied punctuation, or across a caption break', () => {
+    const tidied = {
+      ...found(),
+      quote: 'government MUST make disaggregated data mandatory',
+    };
+    expect(cleanFound([tidied], transcript)[0]?.line).toBe(2);
+    const split = said(
+      'We call on the banks',
+      'to set aside thirty percent of SME lending for women.',
+    );
+    const across = {
+      ...found(),
+      quote:
+        'We call on the banks to set aside thirty percent of SME lending for women.',
+      line: 1,
+    };
+    expect(cleanFound([across], split)[0]?.line).toBe(1);
+  });
+
+  it('finds the right line when the model cites the wrong one', () => {
+    const item = { ...found(), line: 99 };
+    expect(cleanFound([item], transcript)[0]?.line).toBe(2);
+  });
+
+  it('holds a short quote to the exact words', () => {
+    expect(quoteLine('make data mandatory', transcript, 2)).toBeNull();
+    expect(quoteLine('Thank you', transcript, 3)).toBe(3);
   });
 });
 

@@ -85,13 +85,85 @@ export function analysisPrompt(
   ].join('\n\n');
 }
 
+/** Lower case, accents and punctuation gone, single spaces: how a quote and a caption are compared. */
+const plain = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/** Share of a quote's words found in a stretch of transcript (each transcript word used once). */
+function coverage(quoteWords: string[], text: string): number {
+  const bag = new Map<string, number>();
+  for (const w of text.split(' ')) bag.set(w, (bag.get(w) ?? 0) + 1);
+  let hit = 0;
+  for (const w of quoteWords) {
+    const n = bag.get(w) ?? 0;
+    if (n > 0) {
+      bag.set(w, n - 1);
+      hit += 1;
+    }
+  }
+  return quoteWords.length ? hit / quoteWords.length : 0;
+}
+
 /**
- * What the model found, trimmed to the columns' sizes; an item missing its
- * action, target or quote is dropped rather than saved half-filled.
+ * The line a quote was said on, or null when it was not said.
+ *
+ * Every call to action has to rest on words a speaker said; a quote that is
+ * not in the transcript means the model drew the call from somewhere else
+ * (the session brief, the description, its own knowledge) and it is
+ * dropped. The model may tidy punctuation or quote across a caption break,
+ * so a quote counts as said when 80% of its words are in the cited line and
+ * its neighbours, or anywhere three lines together when the cited line is
+ * wrong. A quote of three words or fewer must appear as written.
+ */
+export function quoteLine(
+  quote: string,
+  lines: AnalysisLine[],
+  cited: number,
+): number | null {
+  const q = plain(quote);
+  if (!q || lines.length === 0) return null;
+  const words = q.split(' ');
+  const around = (i: number) =>
+    plain(
+      lines
+        .slice(Math.max(0, i - 1), i + 2)
+        .map((l) => l.text)
+        .join(' '),
+    );
+  const said = (i: number) => {
+    const text = around(i);
+    if (` ${text} `.includes(` ${q} `)) return true;
+    return words.length > 3 && coverage(words, text) >= 0.8;
+  };
+  if (cited >= 1 && cited <= lines.length && said(cited - 1)) return cited;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!said(i)) continue;
+    // the line of the three that holds most of the quote
+    const best = [i - 1, i, i + 1]
+      .filter((j) => j >= 0 && j < lines.length)
+      .sort(
+        (a, b) =>
+          coverage(words, plain(lines[b].text)) -
+          coverage(words, plain(lines[a].text)),
+      )[0];
+    return best + 1;
+  }
+  return null;
+}
+
+/**
+ * What the model found, trimmed to the columns' sizes. An item missing its
+ * action, target or quote is dropped rather than saved half-filled, and so
+ * is one whose quote is not in the transcript (see quoteLine).
  */
 export function cleanFound(
   items: z.infer<typeof Found>['callsToAction'],
-  lineCount: number,
+  lines: AnalysisLine[],
 ): FoundCallToAction[] {
   const text = (v: string | null | undefined, max: number) =>
     v?.trim() ? v.trim().slice(0, max) : null;
@@ -101,6 +173,8 @@ export function cleanFound(
     const directedAt = text(item.directedAt, 200);
     const quote = text(item.quote, 2000);
     if (!action || !directedAt || !quote) continue;
+    const line = quoteLine(quote, lines, item.line);
+    if (line === null) continue;
     out.push({
       type: item.type,
       action,
@@ -112,7 +186,7 @@ export function cleanFound(
       amount: text(item.amount, 120),
       theme: text(item.theme, 120),
       quote,
-      line: item.line >= 1 && item.line <= lineCount ? item.line : 0,
+      line,
       needsDetail: item.needsDetail,
     });
   }
@@ -191,7 +265,14 @@ export class ClaudeAnalysisProvider implements AnalysisProvider {
       );
       return [];
     }
-    return cleanFound(found.callsToAction, lines.length);
+    const clean = cleanFound(found.callsToAction, lines);
+    const dropped = found.callsToAction.length - clean.length;
+    if (dropped > 0) {
+      this.logger.warn(
+        `analysis: ${dropped} of ${found.callsToAction.length} dropped (incomplete, or quote not in the transcript)`,
+      );
+    }
+    return clean;
   }
   /** One request: the whole stretch of transcript, answered in the `Found` shape. */
   private request(
