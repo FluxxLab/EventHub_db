@@ -12,10 +12,12 @@ import { CallsToActionController } from './calls-to-action.controller';
 import { CallsToActionService } from './calls-to-action.service';
 import { CallToAction } from './entities/call-to-action.entity';
 import { SessionAnalysis } from './entities/session-analysis.entity';
+import { StakeholderLink } from './entities/stakeholder-link.entity';
+import { ClaudeStakeholderLinker } from './stakeholder-linker';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([CallToAction, SessionAnalysis]),
+    TypeOrmModule.forFeature([CallToAction, SessionAnalysis, StakeholderLink]),
     // the named transcript a session is analysed from
     CaptionsModule,
     SessionsModule,
@@ -29,6 +31,8 @@ import { SessionAnalysis } from './entities/session-analysis.entity';
     ClaudeDeckDesigner,
     // the session's rapporteur report, filled into the Word template by the console
     ClaudeRapporteurWriter,
+    // which of the event's organisations a broad target such as "Federal Government" covers
+    ClaudeStakeholderLinker,
     StorageService,
   ],
 })

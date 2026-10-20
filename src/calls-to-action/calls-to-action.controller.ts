@@ -19,10 +19,12 @@ import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 import { AccessTier } from '../delegate/entities/delegate.entity';
 import { CallsToActionService } from './calls-to-action.service';
 import {
+  AddStakeholderLinkDto,
   CreateCallToActionDto,
   DeckScopeDto,
   MergeCallsToActionDto,
   SaveCallToActionDto,
+  SetStakeholderLinkDto,
 } from './dto/calls-to-action.dto';
 
 /** An event's calls to action: analysed from its sessions, reviewed by its organisers. */
@@ -41,6 +43,56 @@ export class CallsToActionController {
   })
   list(@Param('id', ParseUUIDPipe) id: string) {
     return this.calls.list(id);
+  }
+
+  @Get('editions/:id/calls-to-action/stakeholders')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      "The event's organisations: each one's delegates, the recommendations aimed at it and its commitments",
+  })
+  stakeholders(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.stakeholders(id);
+  }
+
+  @Post('editions/:id/calls-to-action/stakeholders/suggest')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      'Asks the AI which of the event’s organisations fall under each broad target ("Federal Government"); kept as suggestions to confirm',
+  })
+  suggestLinks(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.suggestLinks(id);
+  }
+
+  @Patch('editions/:id/calls-to-action/stakeholder-links/:linkId')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({ summary: 'Confirms or rejects a stakeholder link' })
+  setLink(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('linkId', ParseUUIDPipe) linkId: string,
+    @Body() dto: SetStakeholderLinkDto,
+  ) {
+    return this.calls.setLink(id, linkId, dto.status);
+  }
+
+  @Post('editions/:id/calls-to-action/stakeholder-links')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      'Ties a broad target to one of the event’s organisations, confirmed',
+  })
+  addLink(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddStakeholderLinkDto,
+  ) {
+    return this.calls.addLink(id, dto.target, dto.organisation);
   }
 
   @Get('editions/:id/calls-to-action/targets')

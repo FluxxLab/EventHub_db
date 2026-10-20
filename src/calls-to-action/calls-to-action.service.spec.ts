@@ -161,6 +161,8 @@ function setup(
     {} as never, // the deck designer: not used here
     {} as never, // storage: not used here
     rapporteur,
+    {} as never, // stakeholder links: see stakeholders.spec and stakeholder-linker.spec
+    {} as never, // the stakeholder linker: likewise
   );
   return {
     service,

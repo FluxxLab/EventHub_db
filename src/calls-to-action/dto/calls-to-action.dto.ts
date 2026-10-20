@@ -143,3 +143,25 @@ export class DeckScopeDto {
   @Min(1)
   day?: number;
 }
+
+/** Confirming or rejecting a suggested stakeholder link. */
+export class SetStakeholderLinkDto {
+  @ApiProperty({ enum: ['confirmed', 'rejected'] })
+  @IsIn(['confirmed', 'rejected'])
+  status: 'confirmed' | 'rejected';
+}
+
+/** Tying a broad target to one of the event's organisations by hand. */
+export class AddStakeholderLinkDto {
+  @ApiProperty({ example: 'Federal Government', maxLength: 200 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  target: string;
+
+  @ApiProperty({ example: 'NITDA', maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  organisation: string;
+}

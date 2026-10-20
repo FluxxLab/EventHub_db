@@ -23,10 +23,18 @@ import type {
 } from './dto/calls-to-action.dto';
 import { CallToAction } from './entities/call-to-action.entity';
 import { SessionAnalysis } from './entities/session-analysis.entity';
+import { linkKey, StakeholderLink } from './entities/stakeholder-link.entity';
+import { ClaudeStakeholderLinker } from './stakeholder-linker';
 import { cleanDesign, type DeckDesign } from './deck/deck-design';
 import { ClaudeDeckDesigner, type DeckImage } from './deck/deck-designer';
 import { cleanReport } from './report/rapporteur-report';
 import { ClaudeRapporteurWriter } from './report/rapporteur-writer';
+import {
+  mapStakeholders,
+  presentLine,
+  type StakeholderDelegate,
+  type StakeholderMap,
+} from './stakeholders';
 
 /** Images larger than this are not shown to Claude (its limit is 5 MB). */
 const MAX_IMAGE_BYTES = 3_500_000;
@@ -104,6 +112,9 @@ export class CallsToActionService {
     private readonly designer: ClaudeDeckDesigner,
     private readonly storage: StorageService,
     private readonly rapporteur: ClaudeRapporteurWriter,
+    @InjectRepository(StakeholderLink)
+    private readonly links: Repository<StakeholderLink>,
+    private readonly linker: ClaudeStakeholderLinker,
   ) {}
 
   /**
@@ -138,6 +149,10 @@ export class CallsToActionService {
       where: { sessionId, status: 'approved' },
       order: { createdAt: 'ASC' },
     });
+    // who each recommendation's organisations have at the event, for its next step
+    const present = approved.some((c) => c.type === 'recommendation')
+      ? await this.stakeholders(session.editionId)
+      : null;
     const { report, reason } = await this.rapporteur.write(
       {
         event: edition.name,
@@ -154,6 +169,10 @@ export class CallsToActionService {
           proposedBy: c.proposedBy,
           deadline: c.deadline,
           amount: c.amount,
+          stakeholdersPresent:
+            present && c.type === 'recommendation'
+              ? presentLine(present, c.id)
+              : null,
         })),
       },
       transcript,
@@ -342,6 +361,166 @@ export class CallsToActionService {
       [editionId],
     );
     return { aiReady: this.ai.configured, items, analyses };
+  }
+
+  /**
+   * The event's organisations, from its ticket holders, each with its
+   * delegates (checked in first), the recommendations aimed at it and the
+   * commitments made by or for it; see stakeholders.ts.
+   */
+  async stakeholders(editionId: string): Promise<StakeholderMap> {
+    await this.editions.findById(editionId);
+    const delegates = await this.dataSource.query<StakeholderDelegate[]>(
+      `SELECT d.id, d.name, d.title, d.email, TRIM(d.organisation) AS organisation,
+              BOOL_OR(EXISTS (SELECT 1 FROM ticket_admissions x WHERE x."ticketId" = t.id)) AS admitted
+         FROM tickets t JOIN delegates d ON d.id = t."delegateId"
+        WHERE t."editionId" = $1 AND COALESCE(TRIM(d.organisation), '') <> ''
+        GROUP BY d.id`,
+      [editionId],
+    );
+    const calls = await this.calls.find({
+      where: { editionId },
+      select: {
+        id: true,
+        type: true,
+        directedAt: true,
+        proposedByOrganisation: true,
+        status: true,
+      },
+    });
+    const links = await this.links.find({
+      where: { editionId },
+      order: { createdAt: 'ASC' },
+    });
+    return mapStakeholders(
+      delegates,
+      calls,
+      links.map((l) => ({
+        id: l.id,
+        target: l.target,
+        organisation: l.organisation,
+        status: l.status,
+        reason: l.reason,
+      })),
+    );
+  }
+
+  /**
+   * Asks the AI which of the event's organisations fall under each broad
+   * target no organisation matches ("Federal Government"), and keeps its
+   * answers as suggestions for organisers to confirm. A target with a
+   * suggestion still waiting is not asked about again, and a pair once
+   * rejected is never suggested again.
+   */
+  async suggestLinks(editionId: string) {
+    const edition = await this.editions.findById(editionId);
+    const map = await this.stakeholders(editionId);
+    const waiting = new Set(
+      map.links
+        .filter((l) => l.status === 'suggested')
+        .map((l) => linkKey(l.target)),
+    );
+    const targets = map.unmatched.filter(
+      (u) => !waiting.has(linkKey(u.target)),
+    );
+    if (targets.length === 0 || map.stakeholders.length === 0) {
+      return {
+        ...map,
+        added: 0,
+        message:
+          map.stakeholders.length === 0
+            ? 'No delegate has an organisation on file to link to.'
+            : 'Every broad target already has links or suggestions to review.',
+      };
+    }
+    const calls = await this.calls.find({
+      where: {
+        editionId,
+        type: 'recommendation',
+        status: Not(In(['rejected', 'merged'])),
+      },
+      select: { directedAt: true, shortText: true },
+    });
+    const { links, reason } = await this.linker.suggest({
+      event: edition.name,
+      targets: targets.map((t) => ({
+        target: t.target,
+        examples: calls
+          .filter((c) => linkKey(c.directedAt) === linkKey(t.target))
+          .slice(0, 3)
+          .map((c) => c.shortText),
+      })),
+      organisations: map.stakeholders.map((s) => s.name),
+    });
+    if (reason) throw new ServiceUnavailableException(reason);
+    const existing = new Set(
+      (await this.links.find({ where: { editionId } })).map(
+        (l) => `${l.targetKey}|${l.organisationKey}`,
+      ),
+    );
+    const fresh = links.filter(
+      (l) => !existing.has(`${linkKey(l.target)}|${linkKey(l.organisation)}`),
+    );
+    if (fresh.length) {
+      await this.links.save(
+        fresh.map((l) =>
+          this.links.create({
+            editionId,
+            target: l.target,
+            targetKey: linkKey(l.target),
+            organisation: l.organisation,
+            organisationKey: linkKey(l.organisation),
+            status: 'suggested',
+            reason: l.reason,
+          }),
+        ),
+      );
+    }
+    return {
+      ...(await this.stakeholders(editionId)),
+      added: fresh.length,
+      message: fresh.length
+        ? `${fresh.length} suggested link${fresh.length === 1 ? '' : 's'} to review.`
+        : 'The AI found no organisation here that clearly belongs to those targets.',
+    };
+  }
+
+  /** Confirms or rejects a link; the map is redrawn with it. */
+  async setLink(
+    editionId: string,
+    linkId: string,
+    status: 'confirmed' | 'rejected',
+  ) {
+    const link = await this.links.findOneBy({ id: linkId, editionId });
+    if (!link) throw new NotFoundException('Link not found');
+    await this.links.update(link.id, { status });
+    return this.stakeholders(editionId);
+  }
+
+  /** Ties a target to an organisation by hand, confirmed at once. */
+  async addLink(editionId: string, target: string, organisation: string) {
+    await this.editions.findById(editionId);
+    const t = target.replace(/\s+/g, ' ').trim();
+    const o = organisation.replace(/\s+/g, ' ').trim();
+    const was = await this.links.findOneBy({
+      editionId,
+      targetKey: linkKey(t),
+      organisationKey: linkKey(o),
+    });
+    if (was) await this.links.update(was.id, { status: 'confirmed' });
+    else
+      await this.links.save(
+        this.links.create({
+          editionId,
+          target: t,
+          targetKey: linkKey(t),
+          organisation: o,
+          organisationKey: linkKey(o),
+          status: 'confirmed',
+          reason: null,
+        }),
+      );
+    return this.stakeholders(editionId);
   }
 
   /**

@@ -71,6 +71,8 @@ export type ReportBrief = {
     proposedBy: string | null;
     deadline: string | null;
     amount: string | null;
+    /** For a recommendation: its organisations with delegates at the event, "NITDA (3 delegates)". */
+    stakeholdersPresent?: string | null;
   }[];
 };
 
@@ -107,7 +109,7 @@ The report's sections:
 - perspectives: up to three points where participants disagreed or highlighted competing priorities, a key tension, or an important voice that was missing or overlooked. One or two sentences each.
 - opportunities: up to three high-impact opportunities or technical prerequisites identified to unlock value: the opportunity, its expected value or outcome (and who benefits), and the key conditions or safeguards for success.
 - challenges: up to three principal barriers, risks or unresolved issues: the challenge or risk, its disenablers (what causes or worsens it), the proposed mitigation, and the stakeholder best placed to act.
-- recommendations: the top recommendations, things participants asked others to do. Start from the approved recommendations you are given, in their wording; add the proposed owner or lead, the immediate next step and the timeframe from the transcript. Add others only if they were clearly made in the session.
+- recommendations: the top recommendations, things participants asked others to do. Start from the approved recommendations you are given, in their wording; add the proposed owner or lead, the immediate next step and the timeframe from the transcript. Add others only if they were clearly made in the session. Where a recommendation lists stakeholders at the event, the next step may say so ("Follow up with NITDA's representatives at the summit"); name the organisation only, never an individual delegate.
 - commitments: explicit commitments only: institutional pledges, funding announcements, pilots, or partnerships that a named party said it will do. Not expressions of interest, aspirations or suggestions. Start from the approved commitments you are given; add who made it, the timeframe and the follow-up lead.
 - synthesis: a short closing paragraph on the session's flow, insights and observations, ending with one sentence on why the discussion matters.
 
@@ -119,7 +121,7 @@ export function reportPrompt(brief: ReportBrief, transcript: string): string {
     ? brief.calls
         .map(
           (c, i) =>
-            `${i + 1}. [${c.type === 'pledge' ? 'commitment' : 'recommendation'}] ${c.action} (for: ${c.directedAt}${c.proposedBy ? `; by: ${c.proposedBy}` : ''}${c.deadline ? `; timeline: ${c.deadline}` : ''}${c.amount ? `; amount: ${c.amount}` : ''})`,
+            `${i + 1}. [${c.type === 'pledge' ? 'commitment' : 'recommendation'}] ${c.action} (for: ${c.directedAt}${c.proposedBy ? `; by: ${c.proposedBy}` : ''}${c.deadline ? `; timeline: ${c.deadline}` : ''}${c.amount ? `; amount: ${c.amount}` : ''}${c.stakeholdersPresent ? `; stakeholders at the event: ${c.stakeholdersPresent}` : ''})`,
         )
         .join('\n')
     : 'None approved yet: draw recommendations and commitments from the transcript, holding commitments to the strict test.';
