@@ -551,6 +551,60 @@ export class SessionsService implements OnApplicationBootstrap {
     return session;
   }
 
+  /** A session's brief (organisers only: the columns are never selected by default). */
+  async brief(id: string): Promise<{
+    text: string | null;
+    fileName: string | null;
+    updatedAt: Date | null;
+  }> {
+    const row = await this.sessions.findOne({
+      where: { id },
+      select: {
+        id: true,
+        brief: true,
+        briefFileName: true,
+        briefUpdatedAt: true,
+      },
+    });
+    if (!row) throw new NotFoundException('Session not found');
+    return {
+      text: row.brief,
+      fileName: row.briefFileName,
+      updatedAt: row.briefUpdatedAt,
+    };
+  }
+
+  /** Replaces a session's brief; empty text clears it. Nothing is broadcast: briefs are internal. */
+  async setBrief(id: string, text: string, fileName?: string) {
+    await this.findById(id);
+    const brief = text.replace(/\r\n?/g, '\n').trim() || null;
+    await this.sessions.update(id, {
+      brief,
+      briefFileName: brief ? fileName?.trim() || null : null,
+      briefUpdatedAt: brief ? new Date() : null,
+    });
+    return this.brief(id);
+  }
+
+  /** Which of an edition's sessions have a brief, for the programme list; not the text. */
+  async briefs(
+    editionId: string,
+  ): Promise<
+    { sessionId: string; fileName: string | null; updatedAt: Date | null }[]
+  > {
+    const rows = await this.sessions
+      .createQueryBuilder('s')
+      .select(['s.id', 's.briefFileName', 's.briefUpdatedAt'])
+      .where('s.editionId = :editionId', { editionId })
+      .andWhere('s.brief IS NOT NULL')
+      .getMany();
+    return rows.map((r) => ({
+      sessionId: r.id,
+      fileName: r.briefFileName,
+      updatedAt: r.briefUpdatedAt,
+    }));
+  }
+
   /**
    * One list of recordings from whichever shape the client sent.
    *

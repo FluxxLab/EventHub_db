@@ -122,6 +122,11 @@ function setup(
       title: 'Data for inclusion',
       speakers: [{ name: 'Dr Amina Bello', organisation: 'NBS' }],
     }),
+    brief: jest.fn().mockResolvedValue({
+      text: 'Asked to address gaps in census data.',
+      fileName: 'brief.docx',
+      updatedAt: null,
+    }),
   } as unknown as SessionsService;
   const editions = {
     findById: jest.fn().mockResolvedValue({ id: EDITION, name: 'Build 2026' }),
@@ -170,7 +175,7 @@ function setup(
 
 describe('calls to action', () => {
   it('suggests what the session asked for, timed by the line it rests on', async () => {
-    const { service, saved, read, analysis } = setup({
+    const { service, saved, read, ai, analysis } = setup({
       rows: [
         { s: 1, text: 'Good morning.', name: 'Moderator' },
         {
@@ -199,6 +204,10 @@ describe('calls to action', () => {
     });
     expect(analysis()).toMatchObject({ analysedUpTo: at(9), runs: 1 });
     expect(result.message).toBe('1 call to action suggested from 3 lines.');
+    // the organisers' brief goes in as context
+    expect((ai.find as jest.Mock).mock.calls[0][1]).toMatchObject({
+      brief: 'Asked to address gaps in census data.',
+    });
   });
 
   it('reads only what was said since the last analysis', async () => {
@@ -346,7 +355,11 @@ describe('rapporteur report', () => {
     expect(out.session.title).toBe('Data for inclusion');
     const [brief, transcript] = (rapporteur.write as jest.Mock).mock
       .calls[0] as [unknown, string];
-    expect(brief).toMatchObject({ session: 'Data for inclusion', calls: [] });
+    expect(brief).toMatchObject({
+      session: 'Data for inclusion',
+      sessionBrief: 'Asked to address gaps in census data.',
+      calls: [],
+    });
     expect(transcript).toContain('Mic 1: We will publish the census data.');
   });
 

@@ -149,6 +149,25 @@ export class Session {
   @Column({ type: 'jsonb', default: () => "'[]'" })
   mics: SessionMic[];
 
+  /**
+   * The organisers' brief for the session, as text: its purpose and what it
+   * is asked to address. The calls-to-action analysis and the rapporteur
+   * report read it as context.
+   *
+   * Never selected by default: briefs are internal, and every session read
+   * (the delegate app's programme included) would otherwise carry them. Read
+   * through SessionsService.brief() and briefs().
+   */
+  @Column({ type: 'text', nullable: true, select: false })
+  brief: string | null;
+
+  /** The file the brief was read from ("Brief - Odumuyiwa.docx"), or null when typed in. */
+  @Column({ type: 'varchar', length: 255, nullable: true, select: false })
+  briefFileName: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, select: false })
+  briefUpdatedAt: Date | null;
+
   @ManyToMany(() => Speaker, { cascade: false })
   @JoinTable({ name: 'session_speakers' })
   speakers: Speaker[];

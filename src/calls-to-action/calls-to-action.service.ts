@@ -143,6 +143,7 @@ export class CallsToActionService {
         event: edition.name,
         session: session.title,
         description: session.description?.trim() || null,
+        sessionBrief: (await this.sessions.brief(sessionId)).text,
         speakers: (session.speakers ?? []).map((s) =>
           s.organisation ? `${s.name} (${s.organisation})` : s.name,
         ),
@@ -431,6 +432,7 @@ export class CallsToActionService {
         ),
         targets: await this.targets(session.editionId),
         alreadyRecorded: recorded.map((r) => r.shortText),
+        brief: (await this.sessions.brief(sessionId)).text,
       });
       const added = found.length
         ? await this.calls.save(

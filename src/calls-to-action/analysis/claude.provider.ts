@@ -37,6 +37,8 @@ For each one:
 - quote: the exact words it rests on, copied from the transcript (one or two sentences).
 - line: the number of the line the quote is on.
 
+SESSION BRIEF, when given, is what the organisers asked the session to address. Use it to understand the subject, the terms and who the session is aimed at, and to set theme. It is not a source of calls to action: record only what a speaker actually said in the transcript, never an aim from the brief that nobody voiced.
+
 Skip anything already listed under ALREADY RECORDED. Return an empty list when there are none.`;
 
 /** The answer's shape; the API holds the model to it. */
@@ -71,6 +73,9 @@ export function analysisPrompt(
   return [
     `EVENT: ${context.event}`,
     `SESSION: ${context.session}`,
+    ...(context.brief?.trim()
+      ? [`SESSION BRIEF:\n${context.brief.trim()}`]
+      : []),
     `SPEAKERS:\n${list(context.speakers)}`,
     `TARGETS:\n${list(context.targets)}`,
     `ALREADY RECORDED:\n${list(context.alreadyRecorded)}`,

@@ -21,6 +21,8 @@ export interface AnalysisContext {
   targets: string[];
   /** What is already recorded for the session, so it is not suggested again. */
   alreadyRecorded: string[];
+  /** The organisers' brief: what the session was asked to address. Context, never a source of calls. */
+  brief?: string | null;
 }
 
 /** A call to action as the model finds it, before it is checked and saved. */

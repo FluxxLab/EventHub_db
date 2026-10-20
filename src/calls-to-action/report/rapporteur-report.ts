@@ -60,6 +60,8 @@ export type ReportBrief = {
   event: string;
   session: string;
   description: string | null;
+  /** The organisers' session brief: what the session was asked to address. */
+  sessionBrief?: string | null;
   speakers: string[];
   /** The session's approved calls, as the organisers worded them. */
   calls: {
@@ -94,10 +96,12 @@ While reading, keep asking:
 5. What should happen next, by whom, and when?
 
 Do: synthesise neutrally, retain nuance, surface diverse views, and distinguish recommendations from commitments.
+When a session brief is given, it says what the organisers asked the session to address. Use it to frame the purpose and to judge what matters most; where a question the brief raised went unaddressed, note it among the perspectives as a gap. Never report anything from the brief as said in the session: insights, evidence, recommendations and commitments come from the transcript only.
+
 Do not: transcribe, record every intervention, overstate consensus, add personal opinions, or attribute sensitive comments to a named person.
 
 The report's sections:
-- purpose: the session's purpose in one sentence.
+- purpose: the session's purpose in one sentence (from the session brief when there is one, as the session actually took it up).
 - attendees: who took part on stage (speakers, moderators), by name and organisation where known, as one short line. Never list audience members by name.
 - insights: the three most consequential findings. For each: the core idea; why it matters and to whom (stakeholder perspectives); the evidence or experience cited; its implication for policy, practice, investment, implementation or governance.
 - perspectives: up to three points where participants disagreed or highlighted competing priorities, a key tension, or an important voice that was missing or overlooked. One or two sentences each.
@@ -123,6 +127,11 @@ export function reportPrompt(brief: ReportBrief, transcript: string): string {
     `Event: ${brief.event}`,
     `Session: ${brief.session}`,
     brief.description ? `Session description: ${brief.description}` : null,
+    brief.sessionBrief?.trim()
+      ? `Session brief (what the organisers asked the session to address):
+${brief.sessionBrief.trim()}
+`
+      : null,
     brief.speakers.length
       ? `Programmed speakers: ${brief.speakers.join('; ')}`
       : null,

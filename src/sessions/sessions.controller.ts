@@ -30,6 +30,7 @@ import { QuerySessionsDto } from './dto/query-sessions.dto';
 import { UpdateSessionDto } from './dto/update-session.dto';
 import { UpdateSessionStatusDto } from './dto/update-session-status.dto';
 import { SetSessionMicsDto } from './dto/set-session-mics.dto';
+import { SetSessionBriefDto } from './dto/set-session-brief.dto';
 import { SessionsService } from './sessions.service';
 import type { AuthUser } from '../auth/strategies/jwt.stategies';
 import { Audit } from '../common/decorators/audit.decorator';
@@ -122,6 +123,38 @@ export class SessionController {
   })
   board() {
     return this.service.board();
+  }
+
+  /** Declared before :id, like `bulk`, so the literal segment is not read as an id. */
+  @Get('briefs')
+  @ApiOperation({ summary: "Which of an edition's sessions have a brief" })
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'query', key: 'editionId' })
+  briefs(@Query('editionId', ParseUUIDPipe) editionId: string) {
+    return this.service.briefs(editionId);
+  }
+
+  @Get(':id/brief')
+  @ApiOperation({ summary: "A session's brief, as text" })
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'session' })
+  brief(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.brief(id);
+  }
+
+  @Put(':id/brief')
+  @ApiOperation({
+    summary:
+      "Replaces a session's brief, which the calls-to-action analysis and the rapporteur report read; empty text clears it",
+  })
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'session' })
+  @Audit({ type: 'session_brief_set', description: 'Session brief set' })
+  setBrief(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetSessionBriefDto,
+  ) {
+    return this.service.setBrief(id, dto.text, dto.fileName);
   }
 
   @Get(':id')
