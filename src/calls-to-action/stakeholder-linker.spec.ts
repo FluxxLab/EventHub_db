@@ -149,7 +149,7 @@ describe('mapping with links', () => {
 });
 
 describe('stakeholders present, for decks and reports', () => {
-  const org = (name: string, delegates: number) => ({
+  const org = (name: string, delegates: number, speakers = 0) => ({
     name,
     spellings: [name],
     delegates: Array.from({ length: delegates }, (_, i) => ({
@@ -159,15 +159,21 @@ describe('stakeholders present, for decks and reports', () => {
       email: `p${i}@x.org`,
       admitted: false,
     })),
+    speakers: Array.from({ length: speakers }, (_, i) => ({
+      id: `${name}-sp${i}`,
+      name: `Speaker ${i}`,
+      role: null,
+    })),
     asks: [],
     commitments: [],
   });
   const map = {
     stakeholders: [
-      org('National Information Technology Development Agency (NITDA)', 3),
+      org('National Information Technology Development Agency (NITDA)', 3, 1),
       org('World Bank', 1),
       org('NCAIR', 2),
       org('Empty Org', 0),
+      org('Data Science Nigeria (DSN)', 0, 1),
     ],
     byCall: {
       one: ['World Bank'],
@@ -178,6 +184,7 @@ describe('stakeholders present, for decks and reports', () => {
       ],
       none: [],
       empty: ['Empty Org'],
+      stage: ['Data Science Nigeria (DSN)'],
     },
     unmatched: [],
     links: [],
@@ -186,9 +193,14 @@ describe('stakeholders present, for decks and reports', () => {
   it('writes the organisations by their abbreviation, busiest first, without naming anyone', () => {
     expect(presentLine(map, 'one')).toBe('World Bank (1 delegate)');
     expect(presentLine(map, 'many')).toBe(
-      'NITDA (3 delegates); NCAIR (2 delegates) and 1 more',
+      'NITDA (3 delegates, 1 speaker); NCAIR (2 delegates) and 1 more',
     );
     expect(presentLine(map, 'many')).not.toContain('Person');
+    expect(presentLine(map, 'many')).not.toContain('Speaker 0');
+  });
+
+  it('counts an organisation that is here only on the programme', () => {
+    expect(presentLine(map, 'stage')).toBe('DSN (1 speaker)');
   });
 
   it('says nothing when nobody from there is at the event', () => {

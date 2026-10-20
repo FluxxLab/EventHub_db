@@ -130,3 +130,53 @@ describe('mapping stakeholders', () => {
     ]);
   });
 });
+
+describe('speakers as stakeholders', () => {
+  const speaker = (
+    name: string,
+    organisation: string,
+    role: string | null = null,
+  ) => ({ id: name, name, role, organisation });
+
+  it('groups speakers with delegates of the same organisation, and lists them apart', () => {
+    const map = mapStakeholders(
+      [delegate('Ada Eze', 'NITDA', true)],
+      [call('r1', 'NITDA')],
+      [],
+      [
+        speaker(
+          'Barr. Emmanuel Edet',
+          'National Information Technology Development Agency (NITDA)',
+          'Ag. Director',
+        ),
+      ],
+    );
+    const nitda = map.stakeholders.find((s) => s.spellings.includes('NITDA'))!;
+    expect(nitda.spellings).toHaveLength(2);
+    expect(nitda.delegates.map((d) => d.name)).toEqual(['Ada Eze']);
+    expect(nitda.speakers).toEqual([
+      {
+        id: 'Barr. Emmanuel Edet',
+        name: 'Barr. Emmanuel Edet',
+        role: 'Ag. Director',
+      },
+    ]);
+    expect(nitda.asks).toEqual(['r1']);
+  });
+
+  it('makes an organisation a stakeholder from its speakers alone, before any delegate has an organisation', () => {
+    const map = mapStakeholders(
+      [],
+      [call('r1', 'World Bank')],
+      [],
+      [speaker('Mathew Verghis', 'World Bank')],
+    );
+    expect(map.stakeholders).toHaveLength(1);
+    expect(map.stakeholders[0]).toMatchObject({
+      name: 'World Bank',
+      delegates: [],
+      asks: ['r1'],
+    });
+    expect(map.byCall.r1).toEqual(['World Bank']);
+  });
+});

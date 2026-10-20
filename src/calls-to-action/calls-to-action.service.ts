@@ -33,6 +33,7 @@ import {
   mapStakeholders,
   presentLine,
   type StakeholderDelegate,
+  type StakeholderSpeaker,
   type StakeholderMap,
 } from './stakeholders';
 
@@ -364,9 +365,10 @@ export class CallsToActionService {
   }
 
   /**
-   * The event's organisations, from its ticket holders, each with its
-   * delegates (checked in first), the recommendations aimed at it and the
-   * commitments made by or for it; see stakeholders.ts.
+   * The event's organisations, from its ticket holders and the speakers on its
+   * programme, each with its delegates (checked in first) and speakers, the
+   * recommendations aimed at it and the commitments made by or for it; see
+   * stakeholders.ts.
    */
   async stakeholders(editionId: string): Promise<StakeholderMap> {
     await this.editions.findById(editionId);
@@ -376,6 +378,14 @@ export class CallsToActionService {
          FROM tickets t JOIN delegates d ON d.id = t."delegateId"
         WHERE t."editionId" = $1 AND COALESCE(TRIM(d.organisation), '') <> ''
         GROUP BY d.id`,
+      [editionId],
+    );
+    const speakers = await this.dataSource.query<StakeholderSpeaker[]>(
+      `SELECT DISTINCT sp.id, sp.name, sp.role, TRIM(sp.organisation) AS organisation
+         FROM sessions s
+         JOIN session_speakers ss ON ss."sessionsId" = s.id
+         JOIN speakers sp ON sp.id = ss."speakersId"
+        WHERE s."editionId" = $1 AND COALESCE(TRIM(sp.organisation), '') <> ''`,
       [editionId],
     );
     const calls = await this.calls.find({
@@ -402,6 +412,7 @@ export class CallsToActionService {
         status: l.status,
         reason: l.reason,
       })),
+      speakers,
     );
   }
 

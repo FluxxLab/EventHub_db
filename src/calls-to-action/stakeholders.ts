@@ -92,6 +92,14 @@ export type StakeholderDelegate = {
   admitted: boolean;
 };
 
+/** Someone on the programme, with the organisation the programme gives them. */
+export type StakeholderSpeaker = {
+  id: string;
+  name: string;
+  role: string | null;
+  organisation: string;
+};
+
 export type StakeholderCall = {
   id: string;
   type: 'recommendation' | 'pledge';
@@ -101,11 +109,13 @@ export type StakeholderCall = {
 };
 
 export type Stakeholder = {
-  /** The spelling most of its delegates use. */
+  /** The spelling most of its people use. */
   name: string;
-  /** Every spelling its delegates used. */
+  /** Every spelling its delegates and speakers used. */
   spellings: string[];
   delegates: Omit<StakeholderDelegate, 'organisation'>[];
+  /** Its people on the programme (who may also hold tickets). */
+  speakers: Omit<StakeholderSpeaker, 'organisation'>[];
   /** Recommendations aimed at it: what it is asked to commit to. */
   asks: string[];
   /** Pledges by or for it. */
@@ -133,20 +143,23 @@ export type StakeholderMap = {
 
 const targetKey = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
+const tidyOrg = (s: string) => s.replace(/\s+/g, ' ').trim();
+
 /**
- * The event's organisations, grouped from their delegates' spellings, each
- * with the calls aimed at it and the commitments made by or for it. Rejected
- * and merged calls are left out.
+ * The event's organisations, grouped from the spellings of its delegates and
+ * speakers, each with the calls aimed at it and the commitments made by or for
+ * it. Rejected and merged calls are left out.
  */
 export function mapStakeholders(
   delegates: StakeholderDelegate[],
   calls: StakeholderCall[],
   links: StakeholderLinkView[] = [],
+  speakers: StakeholderSpeaker[] = [],
 ): StakeholderMap {
   // one organisation per group of spellings that match each other
   const spellings = new Map<string, number>();
-  for (const d of delegates) {
-    const name = d.organisation.replace(/\s+/g, ' ').trim();
+  for (const p of [...delegates, ...speakers]) {
+    const name = tidyOrg(p.organisation);
     if (name) spellings.set(name, (spellings.get(name) ?? 0) + 1);
   }
   const names = [...spellings.keys()];
@@ -231,10 +244,7 @@ export function mapStakeholders(
       name: o.name,
       spellings: o.spellings,
       delegates: delegates
-        .filter(
-          (d) =>
-            orgOf.get(d.organisation.replace(/\s+/g, ' ').trim()) === o.name,
-        )
+        .filter((d) => orgOf.get(tidyOrg(d.organisation)) === o.name)
         .map((d) => ({
           id: d.id,
           name: d.name,
@@ -247,6 +257,10 @@ export function mapStakeholders(
             Number(b.admitted) - Number(a.admitted) ||
             a.name.localeCompare(b.name),
         ),
+      speakers: speakers
+        .filter((s) => orgOf.get(tidyOrg(s.organisation)) === o.name)
+        .map((s) => ({ id: s.id, name: s.name, role: s.role }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
       asks: asks.get(o.name) ?? [],
       commitments: commitments.get(o.name) ?? [],
     }))
@@ -271,24 +285,38 @@ export function shortOrg(name: string): string {
   return abbr ? abbr[1] : name.trim();
 }
 
+/** "3 delegates, 1 speaker": how many of an organisation's people are at the event. */
+export function peopleCount(
+  s: Pick<Stakeholder, 'delegates' | 'speakers'>,
+): string {
+  const n = (k: number, one: string) => `${k} ${one}${k === 1 ? '' : 's'}`;
+  return [
+    s.delegates.length ? n(s.delegates.length, 'delegate') : null,
+    s.speakers.length ? n(s.speakers.length, 'speaker') : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
 /**
- * The organisations a call concerns that have delegates at the event, as one
- * line for a deck or report: "NITDA (3 delegates); World Bank (1 delegate)".
- * Two at most, then "and 2 more". Never names a delegate. Null when none.
+ * The organisations a call concerns that have people at the event, as one
+ * line for a deck or report: "NITDA (3 delegates, 1 speaker); World Bank (1
+ * delegate)". Two at most, then "and 2 more". Never names anyone. Null when
+ * none.
  */
 export function presentLine(
   map: StakeholderMap,
   callId: string,
 ): string | null {
+  const people = (s: Stakeholder) => s.delegates.length + s.speakers.length;
   const orgs = (map.byCall[callId] ?? [])
     .map((name) => map.stakeholders.find((s) => s.name === name))
-    .filter((s): s is Stakeholder => !!s && s.delegates.length > 0)
-    .sort((a, b) => b.delegates.length - a.delegates.length);
+    .filter((s): s is Stakeholder => !!s && people(s) > 0)
+    .sort((a, b) => people(b) - people(a));
   if (!orgs.length) return null;
-  const n = (k: number) => `${k} ${k === 1 ? 'delegate' : 'delegates'}`;
   const shown = orgs
     .slice(0, 2)
-    .map((s) => `${shortOrg(s.name)} (${n(s.delegates.length)})`);
+    .map((s) => `${shortOrg(s.name)} (${peopleCount(s)})`);
   const more = orgs.length - shown.length;
   return `${shown.join('; ')}${more ? ` and ${more} more` : ''}`;
 }
