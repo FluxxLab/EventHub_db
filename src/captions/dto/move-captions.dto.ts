@@ -14,4 +14,12 @@ export class MoveCaptionsDto {
   @IsOptional()
   @IsISO8601()
   since?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'And at or before this time (ISO): a stretch in the middle of a session. To the end when absent.',
+  })
+  @IsOptional()
+  @IsISO8601()
+  until?: string;
 }

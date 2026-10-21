@@ -31,6 +31,8 @@ import type { Response } from 'express';
 import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 import { CaptionVocabularyDto } from './dto/caption-vocabulary.dto';
 import { MoveCaptionsDto } from './dto/move-captions.dto';
+import { AgendaCheckDto } from './dto/agenda-check.dto';
+import { AgendaCheckService } from './agenda-check/agenda-check.service';
 
 @ApiTags('captions')
 @ApiBearerAuth()
@@ -40,7 +42,35 @@ export class CaptionsController {
     private readonly livekit: LivekitService,
     private readonly sessions: SessionsService,
     private readonly captions: CaptionsService,
+    private readonly agendaChecks: AgendaCheckService,
   ) {}
+
+  @Post('agenda-check/:editionId')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'editionId' })
+  @ApiOperation({
+    summary:
+      "Check one room's day of captions against its agenda with AI (names called, subject); suggests moves for stretches filed under the wrong session. Returns a job id to poll.",
+  })
+  agendaCheck(
+    @Param('editionId', ParseUUIDPipe) editionId: string,
+    @Body() dto: AgendaCheckDto,
+  ) {
+    return this.agendaChecks.start(editionId, dto.day, dto.room);
+  }
+
+  @Get('agenda-check/:editionId/:jobId')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'editionId' })
+  @ApiOperation({
+    summary: 'An agenda check: running, done (with its findings) or failed',
+  })
+  agendaCheckJob(
+    @Param('editionId', ParseUUIDPipe) _editionId: string,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+  ) {
+    return this.agendaChecks.job(jobId);
+  }
 
   @Get('vocabulary/:editionId')
   @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
@@ -184,6 +214,7 @@ export class CaptionsController {
       sessionId,
       body.toSessionId,
       body.since ? new Date(body.since) : undefined,
+      body.until ? new Date(body.until) : undefined,
     );
   }
 

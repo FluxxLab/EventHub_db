@@ -1410,7 +1410,13 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     fromId: string,
     toId: string,
     since?: Date,
+    until?: Date,
   ): Promise<{ moved: number; calls: number }> {
+    if (since && until && until < since) {
+      throw new BadRequestException(
+        'The end of the stretch is before its start',
+      );
+    }
     if (fromId === toId) {
       throw new BadRequestException('Pick a different session to move to');
     }
@@ -1451,8 +1457,14 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       `UPDATE transcript_segments seg SET "sessionId" = $2, backfill = true
        WHERE seg."sessionId" = $1
          AND ($3::timestamptz IS NULL OR ${effectiveTimeSql('seg')} >= $3::timestamptz)
+         AND ($4::timestamptz IS NULL OR ${effectiveTimeSql('seg')} <= $4::timestamptz)
        RETURNING seg.id`,
-      [fromId, toId, since ? since.toISOString() : null],
+      [
+        fromId,
+        toId,
+        since ? since.toISOString() : null,
+        until ? until.toISOString() : null,
+      ],
     );
     // pg returns [rows, count] for UPDATE ... RETURNING through TypeORM
     const moved = Array.isArray(rows[0])
@@ -1463,8 +1475,14 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       `UPDATE calls_to_action SET "sessionId" = $2
        WHERE "sessionId" = $1
          AND ($3::timestamptz IS NULL OR "saidAt" >= $3::timestamptz)
+         AND ($4::timestamptz IS NULL OR "saidAt" <= $4::timestamptz)
        RETURNING id`,
-      [fromId, toId, since ? since.toISOString() : null],
+      [
+        fromId,
+        toId,
+        since ? since.toISOString() : null,
+        until ? until.toISOString() : null,
+      ],
     );
     const callsMoved = Array.isArray(calls[0])
       ? (calls[0] as unknown[]).length

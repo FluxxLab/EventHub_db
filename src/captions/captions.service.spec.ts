@@ -652,11 +652,11 @@ describe('CaptionsService.moveCaptions', () => {
     });
     const [sql, params] = query.mock.calls[1] as [string, unknown[]];
     expect(sql).toContain('backfill = true');
-    expect(params).toEqual(['a', 'b', since.toISOString()]);
+    expect(params).toEqual(['a', 'b', since.toISOString(), null]);
     // the calls to action found in those lines go with them
     const [callsSql, callsParams] = query.mock.calls[2] as [string, unknown[]];
     expect(callsSql).toContain('calls_to_action');
-    expect(callsParams).toEqual(['a', 'b', since.toISOString()]);
+    expect(callsParams).toEqual(['a', 'b', since.toISOString(), null]);
   });
 
   it('moves every line when no time is given', async () => {

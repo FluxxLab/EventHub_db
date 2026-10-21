@@ -13,6 +13,7 @@ import { CaptionsGateway } from './captions.gateway';
 import { CaptionsArchiveProcessor } from './captions-archive.processor';
 import { CaptionsGapfillProcessor } from './captions-gapfill.processor';
 import { CaptionsService } from './captions.service';
+import { AgendaCheckService } from './agenda-check/agenda-check.service';
 import {
   IngestController,
   LivekitWebhookController,
@@ -65,6 +66,7 @@ import { SpeakerReviewProcessor } from './speaker-names/speaker-review.processor
   ],
   providers: [
     CaptionsService,
+    AgendaCheckService,
     CaptionsGateway,
     CaptionsArchiveProcessor,
     CaptionsGapfillProcessor,
