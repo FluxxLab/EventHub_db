@@ -30,6 +30,7 @@ import { EventSeverity } from '../security/entities/security-event.entity';
 import type { Response } from 'express';
 import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 import { CaptionVocabularyDto } from './dto/caption-vocabulary.dto';
+import { MoveCaptionsDto } from './dto/move-captions.dto';
 
 @ApiTags('captions')
 @ApiBearerAuth()
@@ -160,6 +161,30 @@ export class CaptionsController {
   @ApiResponse({ status: 200, description: 'Number of rows deleted' })
   async clearCaptions(@Param('sessionId', ParseUUIDPipe) sessionId: string) {
     return this.captions.clearCaptions(sessionId);
+  }
+
+  @Post(':sessionId/captions/move')
+  @Roles(AccessTier.ADMIN)
+  @EditionScoped({ from: 'param', key: 'sessionId', via: 'session' })
+  @Audit({
+    type: 'captions_moved',
+    description: 'Session captions moved to another session',
+    severity: EventSeverity.WARNING,
+  })
+  @ApiOperation({
+    summary:
+      'Move captions said from a time onward to another session of the same event (admin, audited). For when the wrong session was left live.',
+  })
+  @ApiResponse({ status: 201, description: 'Number of rows moved' })
+  async moveCaptions(
+    @Param('sessionId', ParseUUIDPipe) sessionId: string,
+    @Body() body: MoveCaptionsDto,
+  ) {
+    return this.captions.moveCaptions(
+      sessionId,
+      body.toSessionId,
+      body.since ? new Date(body.since) : undefined,
+    );
   }
 
   @Get(':sessionId/transcript/export')

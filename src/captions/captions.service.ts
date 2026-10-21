@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -1391,6 +1393,75 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       `captions cleared for session ${sessionId}: ${affected ?? 0} row(s) deleted`,
     );
     return { deleted: affected ?? 0 };
+  }
+
+  /**
+   * Move a session's lines, said at or after `since` (all of them when it is
+   * absent), to another session of the same event: for when the wrong session
+   * was left live and the next one's talk was captioned into it.
+   *
+   * The source must have ended and its archive pass finished, or that pass
+   * would write the moved stretch back into it. The moved rows are marked
+   * back-filled, so the target's own archive pass keeps them rather than
+   * replacing them, and voice names (which never name back-filled rows) do
+   * not mislabel them.
+   */
+  async moveCaptions(
+    fromId: string,
+    toId: string,
+    since?: Date,
+  ): Promise<{ moved: number }> {
+    if (fromId === toId) {
+      throw new BadRequestException('Pick a different session to move to');
+    }
+    const found = await this.segments.manager.query<
+      { id: string; editionId: string | null; status: string }[]
+    >(
+      `SELECT id, "editionId", status FROM sessions WHERE id = ANY($1::uuid[])`,
+      [[fromId, toId]],
+    );
+    const from = found.find((s) => s.id === fromId);
+    const to = found.find((s) => s.id === toId);
+    if (!from || !to) throw new NotFoundException('Session not found');
+    if (from.editionId !== to.editionId) {
+      throw new BadRequestException('Both sessions must be in the same event');
+    }
+    if (from.status === 'live') {
+      throw new ConflictException(
+        'End this session first, then move its captions',
+      );
+    }
+    const pending = await this.archiveQueue.getJobs([
+      'waiting',
+      'active',
+      'delayed',
+      'prioritized',
+    ]);
+    if (
+      pending.some(
+        (j) => (j?.data as { sessionId?: string })?.sessionId === fromId,
+      )
+    ) {
+      throw new ConflictException(
+        'This session is still being re-transcribed. Try again in a few minutes.',
+      );
+    }
+
+    const rows = await this.segments.manager.query<{ id: string }[]>(
+      `UPDATE transcript_segments seg SET "sessionId" = $2, backfill = true
+       WHERE seg."sessionId" = $1
+         AND ($3::timestamptz IS NULL OR ${effectiveTimeSql('seg')} >= $3::timestamptz)
+       RETURNING seg.id`,
+      [fromId, toId, since ? since.toISOString() : null],
+    );
+    // pg returns [rows, count] for UPDATE ... RETURNING through TypeORM
+    const moved = Array.isArray(rows[0])
+      ? (rows[0] as unknown[]).length
+      : rows.length;
+    this.logger.warn(
+      `moved ${moved} caption row(s) from ${fromId} to ${toId}${since ? ` (from ${since.toISOString()})` : ''}`,
+    );
+    return { moved };
   }
 
   async recentCaptions(
