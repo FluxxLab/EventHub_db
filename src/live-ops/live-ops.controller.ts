@@ -1,10 +1,20 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../common/decorators/roles.decorator';
 import { AccessTier } from '../delegate/entities/delegate.entity';
 import { SetCutToBreakDto } from './dto/set-cut-to-break.dto';
 import { setOverlaysDto } from './dto/set-overlays.dto';
 import { LiveOpsService } from './live-ops.service';
+import { SessionSwitchService } from './switch/session-switch.service';
 import { Audit } from '../common/decorators/audit.decorator';
 import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 
@@ -12,7 +22,39 @@ import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 @ApiBearerAuth()
 @Controller('live-ops')
 export class LiveOpsController {
-  constructor(private readonly service: LiveOpsService) {}
+  constructor(
+    private readonly service: LiveOpsService,
+    private readonly switches: SessionSwitchService,
+  ) {}
+
+  @Get('switch-suggestions')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
+  @EditionScoped({ from: 'current' })
+  @ApiOperation({
+    summary:
+      "The AI's open suggestions that a room's next session has started or its live one ended, and how many were right today",
+  })
+  switchSuggestions() {
+    return this.switches.list();
+  }
+
+  @Post('switch-suggestions/:id/accept')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
+  @EditionScoped({ from: 'current' })
+  @ApiOperation({ summary: 'The room was switched from this suggestion' })
+  acceptSwitch(@Param('id', ParseUUIDPipe) id: string) {
+    return this.switches.decide(id, 'accepted');
+  }
+
+  @Post('switch-suggestions/:id/dismiss')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN, AccessTier.SESSION_ADMIN)
+  @EditionScoped({ from: 'current' })
+  @ApiOperation({ summary: 'Not yet: the suggestion was wrong' })
+  dismissSwitch(@Param('id', ParseUUIDPipe) id: string) {
+    return this.switches.decide(id, 'dismissed');
+  }
 
   @Get('overview')
   @ApiOperation({

@@ -124,6 +124,12 @@ export class EnvironmentVariables {
   @IsOptional() @IsInt() @Min(1) TRANSLATION_CONCURRENCY?: number;
   /** The Claude model that finds a session's calls to action (default claude-opus-5-5); uses ANTHROPIC_API_KEY. */
   @IsOptional() @IsString() ANALYSIS_MODEL?: string;
+  /** `on` lets the AI suggest when a room's next session has started or its live one ended (Live ops). Off unless set. */
+  @IsOptional() @IsString() SESSION_SWITCH_SUGGESTIONS?: string;
+  /** The Claude model that confirms a changeover (default claude-fable-5-1). */
+  @IsOptional() @IsString() SESSION_SWITCH_MODEL?: string;
+  /** Most changeover checks sent to Claude in a day, across all rooms (default 200). */
+  @IsOptional() @IsInt() @Min(1) SESSION_SWITCH_DAILY_CAP?: number;
   /** Comma-separated Google OAuth client IDs (web, iOS, Android) accepted by POST /auth/google; unset disables Google sign-in. */
   @IsOptional() @IsString() GOOGLE_CLIENT_IDS?: string;
 

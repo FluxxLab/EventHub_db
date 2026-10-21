@@ -46,6 +46,10 @@ services:
     image: pic-events-api:latest
     restart: unless-stopped
     env_file: .env
+    environment:
+      # AI changeover suggestions on Live ops (live-ops/switch): on unless .env
+      # says SESSION_SWITCH_SUGGESTIONS=off.
+      SESSION_SWITCH_SUGGESTIONS: ${SESSION_SWITCH_SUGGESTIONS:-on}
     deploy:
       replicas: ${API_REPLICAS:-2}
     # `required: false` lets the api start when the container is not part of
