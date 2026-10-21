@@ -1453,8 +1453,19 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    /**
+     * Marked back-filled only when the target's own archive pass is still to
+     * come (it is live, not started, or being re-transcribed): that pass
+     * replaces its unmarked lines. A finished target keeps them as they were,
+     * so the names copied below can apply to them.
+     */
+    const protect =
+      to.status !== 'completed' ||
+      pending.some(
+        (j) => (j?.data as { sessionId?: string })?.sessionId === toId,
+      );
     const rows = await this.segments.manager.query<{ id: string }[]>(
-      `UPDATE transcript_segments seg SET "sessionId" = $2, backfill = true
+      `UPDATE transcript_segments seg SET "sessionId" = $2, backfill = (seg.backfill OR $5)
        WHERE seg."sessionId" = $1
          AND ($3::timestamptz IS NULL OR ${effectiveTimeSql('seg')} >= $3::timestamptz)
          AND ($4::timestamptz IS NULL OR ${effectiveTimeSql('seg')} <= $4::timestamptz)
@@ -1464,6 +1475,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
         toId,
         since ? since.toISOString() : null,
         until ? until.toISOString() : null,
+        protect,
       ],
     );
     // pg returns [rows, count] for UPDATE ... RETURNING through TypeORM
@@ -1487,6 +1499,14 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     const callsMoved = Array.isArray(calls[0])
       ? (calls[0] as unknown[]).length
       : calls.length;
+    // and who said them
+    await this.speakerNames
+      .copyForMove(fromId, toId, since, until)
+      .catch((error: Error) =>
+        this.logger.warn(
+          `speaker names not copied from ${fromId} to ${toId}: ${error.message}`,
+        ),
+      );
     this.logger.warn(
       `moved ${moved} caption row(s) and ${callsMoved} call(s) to action from ${fromId} to ${toId}${since ? ` (from ${since.toISOString()})` : ''}`,
     );

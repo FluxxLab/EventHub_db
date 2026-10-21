@@ -13,7 +13,10 @@ import { In, Not, Repository } from 'typeorm';
 import { RealtimeService, Rooms } from '../../common/realtime/realtime.service';
 import { EditionsService } from '../../editions/editions.service';
 import type { SpeakerNaming } from '../../editions/entities/edition.entity';
-import type { Session } from '../../sessions/entities/session.entity';
+import {
+  SessionStatus,
+  type Session,
+} from '../../sessions/entities/session.entity';
 import { SessionsService } from '../../sessions/sessions.service';
 import { TranscriptSegment } from '../entities/transcript-segment.entity';
 import { effectiveTimeSql, seqOf } from '../segment-time';
@@ -50,6 +53,7 @@ import {
   type PendingIntro,
   type ProgrammeSpeaker,
   type ReviewFinding,
+  type ReviewNaming,
 } from './speaker-naming-plan';
 import type {
   CreateSpeakerNameDto,
@@ -102,6 +106,9 @@ const KEEP_JOBS_SECONDS = 24 * 60 * 60;
 /** How many lines after "please welcome X" are checked for X's first line. */
 const CLAIM_SCAN_LINES = 60;
 
+/** How long a session's names are trusted from memory before being read again. */
+const APPLIED_TTL_MS = 30_000;
+
 const roomKey = (room: string) => room.trim().toLowerCase();
 const hms = (at: number) => new Date(at).toISOString().slice(11, 19);
 
@@ -125,6 +132,8 @@ export class SpeakerNamesService {
 
   /** Applied bindings per session, for naming lines without a query each. */
   private readonly applied = new Map<string, SpeakerName[]>();
+  /** When each session's bindings were read: re-read after APPLIED_TTL_MS, as the other API instance may have changed them. */
+  private readonly appliedAt = new Map<string, number>();
   private readonly loading = new Map<string, Promise<SpeakerName[]>>();
 
   /** The stream run each captioned room is in, by normalised room. */
@@ -157,7 +166,11 @@ export class SpeakerNamesService {
   /** The session's applied bindings, from the cache or the database. */
   async appliedFor(sessionId: string): Promise<SpeakerName[]> {
     const hit = this.applied.get(sessionId);
-    if (hit) return hit;
+    if (
+      hit &&
+      Date.now() - (this.appliedAt.get(sessionId) ?? 0) < APPLIED_TTL_MS
+    )
+      return hit;
     let load = this.loading.get(sessionId);
     if (!load) {
       load = this.names
@@ -167,6 +180,7 @@ export class SpeakerNamesService {
         })
         .then((rows) => {
           this.applied.set(sessionId, rows);
+          this.appliedAt.set(sessionId, Date.now());
           return rows;
         })
         .finally(() => this.loading.delete(sessionId));
@@ -720,7 +734,13 @@ export class SpeakerNamesService {
    */
   async runReview(job: ReviewJob): Promise<ReviewResult> {
     const session = await this.sessions.findById(job.sessionId);
-    const setting = await this.settingFor(session);
+    // Live naming follows the event's switch. Reviewing a finished session is
+    // an organiser's own request, after the room has moved on, so it names
+    // everyone it hears introduced whatever the switch says.
+    const setting: ReviewNaming =
+      session.status === SessionStatus.COMPLETED
+        ? 'finished'
+        : await this.settingFor(session);
     if (setting === 'off') return { added: 0, changed: 0 };
     const rows = await this.segments
       .createQueryBuilder('seg')
@@ -790,6 +810,51 @@ export class SpeakerNamesService {
       `speaker review of ${job.sessionId}: ${plan.add.length} added, ${plan.remove.length} replaced, ${plan.skipped} skipped`,
     );
     return { added: plan.add.length, changed: plan.remove.length };
+  }
+
+  /**
+   * Lines moved to another session take their names with them: the applied
+   * bindings covering the moved stretch are copied to the target, cut to it.
+   * Returns how many were copied.
+   */
+  async copyForMove(
+    fromId: string,
+    toId: string,
+    since?: Date,
+    until?: Date,
+  ): Promise<number> {
+    const start = since?.getTime() ?? -Infinity;
+    const end = until ? until.getTime() + 1 : Infinity;
+    const source = await this.names.find({
+      where: { sessionId: fromId, status: In(['auto', 'confirmed']) },
+    });
+    const copies = source
+      .filter(
+        (b) =>
+          b.fromAt.getTime() < end &&
+          (b.toAt === null || b.toAt.getTime() > start),
+      )
+      .map((b) =>
+        this.names.create({
+          sessionId: toId,
+          kind: b.kind,
+          key: b.key,
+          name: b.name,
+          organisation: b.organisation,
+          speakerId: b.speakerId,
+          status: b.status,
+          source: b.source,
+          evidence: b.evidence,
+          fromAt: new Date(Math.max(b.fromAt.getTime(), start)),
+          toAt:
+            end === Infinity
+              ? b.toAt
+              : new Date(Math.min(b.toAt?.getTime() ?? end, end)),
+        }),
+      );
+    if (copies.length) await this.names.save(copies);
+    await this.refresh(toId);
+    return copies.length;
   }
 
   /* ------------------------------------------------------------- shared */

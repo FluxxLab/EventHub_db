@@ -66,6 +66,8 @@ describe('introductionCandidate', () => {
 describe('statusFor', () => {
   it('applies programme matches on its own, suggests strangers only when everyone is named', () => {
     expect(statusFor('off', true)).toBeNull();
+    // a finished session named on an organiser's request applies every name
+    expect(statusFor('finished', false)).toBe('auto');
     expect(statusFor('off', false)).toBeNull();
     expect(statusFor('programme', true)).toBe('auto');
     expect(statusFor('programme', false)).toBeNull();

@@ -81,13 +81,22 @@ export function introductionCandidate(text: string): boolean {
  * names everyone, else nothing.
  */
 export function statusFor(
-  setting: SpeakerNaming,
+  setting: ReviewNaming,
   matchedProgramme: boolean,
 ): 'auto' | 'suggested' | null {
+  // a finished session reviewed on request: every name heard is applied
+  if (setting === 'finished') return 'auto';
   if (setting === 'off') return null;
   if (matchedProgramme) return 'auto';
   return setting === 'everyone' ? 'suggested' : null;
 }
+
+/**
+ * The event's naming setting, or `finished`: an organiser asked for a
+ * finished session to be named, which is not live captioning, so the live
+ * switch does not apply and every name heard in an introduction is used.
+ */
+export type ReviewNaming = SpeakerNaming | 'finished';
 
 export interface Binding {
   kind: SpeakerNameKind;
@@ -359,7 +368,7 @@ export function planReview(
   findings: readonly ReviewFinding[],
   lines: readonly { at: number }[],
   existing: readonly ExistingBinding[],
-  setting: SpeakerNaming,
+  setting: ReviewNaming,
   speakers: readonly ProgrammeSpeaker[],
 ): ReviewPlan {
   const add: NewBinding[] = [];

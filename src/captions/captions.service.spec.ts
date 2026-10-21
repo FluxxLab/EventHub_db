@@ -135,6 +135,7 @@ function build(redis = new FakeRedis(), settings: Record<string, string> = {}) {
     runEnded: jest.fn(),
     onFinal: jest.fn().mockResolvedValue(undefined),
     appliedFor: jest.fn().mockResolvedValue([]),
+    copyForMove: jest.fn().mockResolvedValue(0),
     attributeNow: (
       _sessionId: string,
       _line: unknown,
@@ -651,12 +652,37 @@ describe('CaptionsService.moveCaptions', () => {
       calls: 1,
     });
     const [sql, params] = query.mock.calls[1] as [string, unknown[]];
-    expect(sql).toContain('backfill = true');
-    expect(params).toEqual(['a', 'b', since.toISOString(), null]);
+    expect(sql).toContain('backfill = (seg.backfill OR $5)');
+    expect(params).toEqual(['a', 'b', since.toISOString(), null, true]);
     // the calls to action found in those lines go with them
     const [callsSql, callsParams] = query.mock.calls[2] as [string, unknown[]];
     expect(callsSql).toContain('calls_to_action');
     expect(callsParams).toEqual(['a', 'b', since.toISOString(), null]);
+  });
+
+  it('keeps lines moved to a finished session nameable, and copies their names', async () => {
+    const t = build();
+    t.segments.manager.query
+      .mockResolvedValueOnce([
+        { id: 'a', editionId: 'e1', status: 'completed' },
+        { id: 'b', editionId: 'e1', status: 'completed' },
+      ])
+      .mockResolvedValueOnce([[{ id: 'r1' }], 1])
+      .mockResolvedValueOnce([[], 0]);
+    const since = new Date('2026-10-21T11:58:00Z');
+    const until = new Date('2026-10-21T12:31:00Z');
+    await t.service.moveCaptions('a', 'b', since, until);
+    const [, params] = t.segments.manager.query.mock.calls[1] as [
+      string,
+      unknown[],
+    ];
+    expect(params[4]).toBe(false);
+    expect(t.speakerNames.copyForMove).toHaveBeenCalledWith(
+      'a',
+      'b',
+      since,
+      until,
+    );
   });
 
   it('moves every line when no time is given', async () => {
