@@ -76,6 +76,66 @@ describe('CaptionsGateway capture', () => {
     expect(captions.sendAudio).toHaveBeenCalledWith('Hall B', Buffer.from('c'));
   });
 
+  it('lets an event organiser capture only while the event in the app is theirs', async () => {
+    const captions = service();
+    captions.startRoom.mockResolvedValue({ ok: true });
+    const access = {
+      editionsOf: jest.fn().mockResolvedValue(['build-2026']),
+      currentEdition: jest.fn().mockResolvedValue('build-2026'),
+    };
+    const gateway = new CaptionsGateway(captions as never, access as never);
+    const organiser = desk('organiser');
+    organiser.data.user = { id: 'u1', role: AccessTier.EVENT_ADMIN };
+    const s = organiser as unknown as Socket;
+
+    await expect(
+      gateway.startCapture(s, { room: 'Main Hall' }),
+    ).resolves.toEqual({ capturing: 'Main Hall', diarise: true });
+    gateway.audio(s, Buffer.from('a'));
+    expect(captions.sendAudio).toHaveBeenCalledWith(
+      'Main Hall',
+      Buffer.from('a'),
+    );
+    // cleared once at start: audio does not look the organiser up again
+    expect(access.editionsOf).toHaveBeenCalledTimes(1);
+
+    // the app moved on to an event they do not run: refused at the next start, and their audio with it
+    access.currentEdition.mockResolvedValue('gs-26');
+    await expect(
+      gateway.startCapture(s, { room: 'Main Hall' }),
+    ).resolves.toMatchObject({ error: 'forbidden' });
+    captions.sendAudio.mockClear();
+    gateway.audio(s, Buffer.from('b'));
+    expect(captions.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it('refuses delegates, and organisers when nothing says which events are theirs', async () => {
+    const captions = service();
+    const delegate = desk('delegate');
+    delegate.data.user = { id: 'd1', role: AccessTier.STANDARD };
+    const gateway = new CaptionsGateway(
+      captions as never,
+      {
+        editionsOf: jest.fn().mockResolvedValue([]),
+        currentEdition: jest.fn().mockResolvedValue('build-2026'),
+      } as never,
+    );
+    await expect(
+      gateway.startCapture(delegate as unknown as Socket, {
+        room: 'Main Hall',
+      }),
+    ).resolves.toMatchObject({ error: 'forbidden' });
+
+    const unassigned = desk('unassigned');
+    unassigned.data.user = { id: 'u2', role: AccessTier.EVENT_ADMIN };
+    await expect(
+      gateway.startCapture(unassigned as unknown as Socket, {
+        room: 'Main Hall',
+      }),
+    ).resolves.toMatchObject({ error: 'forbidden' });
+    expect(captions.startRoom).not.toHaveBeenCalled();
+  });
+
   it('starts the grace period when a capture desk disconnects', () => {
     const captions = service();
     const gateway = new CaptionsGateway(captions as never);

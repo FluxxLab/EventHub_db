@@ -6,7 +6,9 @@ import {
   SubscribeMessage,
   WebSocketGateway,
 } from '@nestjs/websockets';
+import { Optional } from '@nestjs/common';
 import type { Socket } from 'socket.io';
+import { EditionAccessService } from '../common/edition-scope/edition-access.service';
 import { Rooms } from '../common/realtime/realtime.service';
 import { CAPTURE_DESKS_ROOM, CaptionsService } from './captions.service';
 import { CaptionLanguage, toCaptionLanguage } from './translation/languages';
@@ -79,7 +81,11 @@ export function deskAudio(body: unknown): RawAudioFormat | undefined {
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class CaptionsGateway implements OnGatewayDisconnect {
-  constructor(private readonly captionsService: CaptionsService) {}
+  constructor(
+    private readonly captionsService: CaptionsService,
+    // whose events an event organiser runs (see mayCapture)
+    @Optional() private readonly editionAccess?: EditionAccessService,
+  ) {}
 
   /**
    * Both sides of the gateway care about a socket going away: a delegate's
@@ -148,7 +154,40 @@ export class CaptionsGateway implements OnGatewayDisconnect {
    */
   private static canCapture(socket: Socket): boolean {
     const role = (socket.data.user as { role?: string } | undefined)?.role;
-    return role === AccessTier.ADMIN || role === AccessTier.SESSION_ADMIN;
+    return (
+      role === AccessTier.ADMIN ||
+      role === AccessTier.SESSION_ADMIN ||
+      socket.data.captureCleared === true
+    );
+  }
+
+  /**
+   * Event organisers run the events they are given, captions included: one
+   * may capture while the current event (the one captions follow) is one of
+   * theirs. Checked when a desk starts or restarts, then remembered on the
+   * socket, so audio - several chunks a second - never waits on the
+   * database. Admins and session operators may always capture.
+   */
+  private async mayCapture(socket: Socket): Promise<boolean> {
+    const user = socket.data.user as { id?: string; role?: string } | undefined;
+    if (
+      user?.role === AccessTier.ADMIN ||
+      user?.role === AccessTier.SESSION_ADMIN
+    )
+      return true;
+    socket.data.captureCleared = false;
+    if (
+      user?.role !== AccessTier.EVENT_ADMIN ||
+      !user.id ||
+      !this.editionAccess
+    )
+      return false;
+    const [mine, current] = await Promise.all([
+      this.editionAccess.editionsOf(user.id),
+      this.editionAccess.currentEdition(),
+    ]);
+    socket.data.captureCleared = !!current && mine.includes(current);
+    return socket.data.captureCleared === true;
   }
 
   @SubscribeMessage('capture:start')
@@ -157,7 +196,12 @@ export class CaptionsGateway implements OnGatewayDisconnect {
     @MessageBody()
     body: string | { room: string; diarise?: boolean; audio?: RawAudioFormat },
   ) {
-    if (!CaptionsGateway.canCapture(socket)) return { error: 'forbidden' };
+    if (!(await this.mayCapture(socket)))
+      return {
+        error: 'forbidden',
+        message:
+          'Only admins, session operators and the organisers of the event now in the app can caption a room.',
+      };
 
     // Older capture pages send a bare room string, which means diarise.
     const room = typeof body === 'string' ? body : body.room;
