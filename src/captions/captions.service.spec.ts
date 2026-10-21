@@ -121,10 +121,14 @@ function build(redis = new FakeRedis(), settings: Record<string, string> = {}) {
     find: jest.fn().mockResolvedValue([]),
     save: jest.fn(),
     create: jest.fn((v: unknown) => v),
+    manager: { query: jest.fn() },
   };
   const session = { findLiveInRoom: jest.fn().mockResolvedValue({ id: 's1' }) };
   const realtime = { emitToRoom: jest.fn(), emitGlobal: jest.fn() };
-  const archiveQueue = { add: jest.fn().mockResolvedValue({}) };
+  const archiveQueue = {
+    add: jest.fn().mockResolvedValue({}),
+    getJobs: jest.fn().mockResolvedValue([]),
+  };
   // No heard names: a line is named by its mic's label or not at all.
   const speakerNames = {
     runStarted: jest.fn().mockResolvedValue(undefined),
@@ -626,5 +630,77 @@ describe('CaptionsService pre-roll window', () => {
     });
     expect(t.stream.sendAudio).not.toHaveBeenCalled();
     await t.service.stopRoom('Hall S');
+  });
+});
+
+describe('CaptionsService.moveCaptions', () => {
+  const sessions = (fromStatus = 'completed', toEdition = 'e1') => [
+    { id: 'a', editionId: 'e1', status: fromStatus },
+    { id: 'b', editionId: toEdition, status: 'live' },
+  ];
+
+  it('moves the lines from a time onward, marked back-filled', async () => {
+    const t = build();
+    const query = t.segments.manager.query;
+    query.mockResolvedValueOnce(sessions());
+    query.mockResolvedValueOnce([[{ id: 'r1' }, { id: 'r2' }], 2]);
+    query.mockResolvedValueOnce([[{ id: 'c1' }], 1]);
+    const since = new Date('2026-10-21T11:25:00Z');
+    await expect(t.service.moveCaptions('a', 'b', since)).resolves.toEqual({
+      moved: 2,
+      calls: 1,
+    });
+    const [sql, params] = query.mock.calls[1] as [string, unknown[]];
+    expect(sql).toContain('backfill = true');
+    expect(params).toEqual(['a', 'b', since.toISOString()]);
+    // the calls to action found in those lines go with them
+    const [callsSql, callsParams] = query.mock.calls[2] as [string, unknown[]];
+    expect(callsSql).toContain('calls_to_action');
+    expect(callsParams).toEqual(['a', 'b', since.toISOString()]);
+  });
+
+  it('moves every line when no time is given', async () => {
+    const t = build();
+    t.segments.manager.query
+      .mockResolvedValueOnce(sessions())
+      .mockResolvedValueOnce([[], 0])
+      .mockResolvedValueOnce([[], 0]);
+    await t.service.moveCaptions('a', 'b');
+    const [, params] = t.segments.manager.query.mock.calls[1] as [
+      string,
+      unknown[],
+    ];
+    expect(params[2]).toBeNull();
+  });
+
+  it('refuses a session that is still live', async () => {
+    const t = build();
+    t.segments.manager.query.mockResolvedValueOnce(sessions('live'));
+    await expect(t.service.moveCaptions('a', 'b')).rejects.toThrow(/End this/);
+  });
+
+  it('refuses another event', async () => {
+    const t = build();
+    t.segments.manager.query.mockResolvedValueOnce(sessions('completed', 'e2'));
+    await expect(t.service.moveCaptions('a', 'b')).rejects.toThrow(
+      /same event/,
+    );
+  });
+
+  it('waits while the source is still being re-transcribed', async () => {
+    const t = build();
+    t.segments.manager.query.mockResolvedValueOnce(sessions());
+    t.archiveQueue.getJobs.mockResolvedValueOnce([
+      { data: { sessionId: 'a' } },
+    ]);
+    await expect(t.service.moveCaptions('a', 'b')).rejects.toThrow(
+      /re-transcribed/,
+    );
+    expect(t.segments.manager.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses moving to itself', async () => {
+    const t = build();
+    await expect(t.service.moveCaptions('a', 'a')).rejects.toThrow(/different/);
   });
 });

@@ -1410,7 +1410,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     fromId: string,
     toId: string,
     since?: Date,
-  ): Promise<{ moved: number }> {
+  ): Promise<{ moved: number; calls: number }> {
     if (fromId === toId) {
       throw new BadRequestException('Pick a different session to move to');
     }
@@ -1458,10 +1458,21 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     const moved = Array.isArray(rows[0])
       ? (rows[0] as unknown[]).length
       : rows.length;
-    this.logger.warn(
-      `moved ${moved} caption row(s) from ${fromId} to ${toId}${since ? ` (from ${since.toISOString()})` : ''}`,
+    // what the analysis found in those lines goes with them, so commitments sit under the session that made them
+    const calls = await this.segments.manager.query<unknown[]>(
+      `UPDATE calls_to_action SET "sessionId" = $2
+       WHERE "sessionId" = $1
+         AND ($3::timestamptz IS NULL OR "saidAt" >= $3::timestamptz)
+       RETURNING id`,
+      [fromId, toId, since ? since.toISOString() : null],
     );
-    return { moved };
+    const callsMoved = Array.isArray(calls[0])
+      ? (calls[0] as unknown[]).length
+      : calls.length;
+    this.logger.warn(
+      `moved ${moved} caption row(s) and ${callsMoved} call(s) to action from ${fromId} to ${toId}${since ? ` (from ${since.toISOString()})` : ''}`,
+    );
+    return { moved, calls: callsMoved };
   }
 
   async recentCaptions(
