@@ -53,4 +53,11 @@ export interface AnalysisProvider {
     lines: AnalysisLine[],
     context: AnalysisContext,
   ): Promise<FoundCallToAction[]>;
+  /** Who said each call (by ref), read from the transcript; only grounded names. */
+  whoSaid?(
+    session: string,
+    speakers: string[],
+    lines: AnalysisLine[],
+    items: { ref: string; line: number; quote: string }[],
+  ): Promise<Map<string, { name: string; organisation: string | null }>>;
 }

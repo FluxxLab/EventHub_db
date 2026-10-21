@@ -1,3 +1,4 @@
+import { quoteLine } from './analysis/claude.provider';
 import {
   BadRequestException,
   ConflictException,
@@ -692,6 +693,72 @@ export class CallsToActionService {
     );
     // pg returns [rows, count] for DELETE ... RETURNING through TypeORM
     return Array.isArray(rows[0]) ? (rows[0] as unknown[]).length : rows.length;
+  }
+
+  /**
+   * Fills in who said a session's calls where nobody is named, by reading the
+   * transcript around each one (introductions, handovers, thanks). Only empty
+   * names are filled; nothing else about a call changes.
+   */
+  async fillWhoSaid(
+    sessionId: string,
+  ): Promise<{ filled: number; missing: number }> {
+    if (!this.ai.configured || !this.ai.whoSaid) {
+      throw new ServiceUnavailableException(
+        'AI analysis is not set up yet: add ANTHROPIC_API_KEY on the server.',
+      );
+    }
+    const unnamed = (
+      await this.calls.find({ where: { sessionId, status: Not('rejected') } })
+    ).filter((c) => c.status !== 'merged' && !c.proposedBy?.trim());
+    if (!unnamed.length) return { filled: 0, missing: 0 };
+    const session = await this.sessions.findById(sessionId);
+    const rows = (await this.captions.fullTranscript(sessionId, 'en')).slice(
+      -MAX_LINES,
+    );
+    if (!rows.length) return { filled: 0, missing: unnamed.length };
+    const lines: AnalysisLine[] = rows.map((r, i) => ({
+      n: i + 1,
+      at: r.createdAt,
+      who: whoSaid(r),
+      text: r.text,
+    }));
+    // each call's line: where its quote is, else the line nearest when it was said
+    const nearest = (at: Date | null) => {
+      if (!at) return 1;
+      let best = 0;
+      for (let i = 1; i < lines.length; i++) {
+        if (
+          Math.abs(lines[i].at.getTime() - at.getTime()) <
+          Math.abs(lines[best].at.getTime() - at.getTime())
+        )
+          best = i;
+      }
+      return best + 1;
+    };
+    const items = unnamed.map((c, i) => ({
+      ref: `C${i + 1}`,
+      line:
+        (c.quote ? quoteLine(c.quote, lines, nearest(c.saidAt)) : null) ??
+        nearest(c.saidAt),
+      quote: c.quote ?? c.action,
+    }));
+    const speakers = (session.speakers ?? []).map((s) =>
+      s.organisation ? `${s.name} (${s.organisation})` : s.name,
+    );
+    const found = await this.ai.whoSaid(session.title, speakers, lines, items);
+    let filled = 0;
+    for (let i = 0; i < unnamed.length; i++) {
+      const who = found.get(items[i].ref);
+      if (!who) continue;
+      await this.calls.update(unnamed[i].id, {
+        proposedBy: who.name,
+        proposedByOrganisation:
+          unnamed[i].proposedByOrganisation ?? who.organisation,
+      });
+      filled++;
+    }
+    return { filled, missing: unnamed.length - filled };
   }
 
   /** One added by hand: approved straight away, since a person wrote it. */

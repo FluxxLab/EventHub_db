@@ -131,6 +131,18 @@ export class CallsToActionController {
     return this.calls.analyse(id, fromStart === 'true');
   }
 
+  @Post('sessions/:id/who-said-it')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id', via: 'session' })
+  @ApiOperation({
+    summary:
+      "Fill in who said the session's calls to action where nobody is named, read from the transcript (introductions, handovers, thanks)",
+  })
+  fillWhoSaid(@Param('id', ParseUUIDPipe) id: string) {
+    return this.calls.fillWhoSaid(id);
+  }
+
   @Post('sessions/:id/rapporteur-report')
   @HttpCode(200)
   @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)

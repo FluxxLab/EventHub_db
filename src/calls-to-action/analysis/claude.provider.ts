@@ -13,6 +13,14 @@ import type {
   AnalysisProvider,
   FoundCallToAction,
 } from './analysis.provider';
+import {
+  cleanWho,
+  nameIsGrounded,
+  WHO_INSTRUCTIONS,
+  WhoAnswer,
+  whoPrompt,
+  type WhoItem,
+} from './who-said-it';
 
 /** ANALYSIS_MODEL picks another. */
 const DEFAULT_MODEL = 'claude-opus-5-5';
@@ -31,7 +39,7 @@ For each one:
 - action: the full action in plain words.
 - shortText: the slide version, at most 25 words, leading with the action ("Fund 500 GBV shelters across the six zones by 2027").
 - directedAt: who is called on to commit. Use a name from TARGETS when one fits exactly, otherwise the organisation or group as said. For a pledge, the speaker's own organisation.
-- proposedBy: the speaker's name from the transcript line, or null when the line is "Mic N", "Speaker N" or Unknown. proposedByOrganisation: theirs from SPEAKERS, else null.
+- proposedBy: who said it. When the line carries a name, that name. When it is only a voice ("Speaker N", "Mic N", Unknown), find the person in the transcript: a host or moderator introducing them ("please welcome…", "over to you, Dr…"), the speaker introducing themselves ("my name is…"), the same voice continuing after such an introduction, or thanks afterwards ("thank you, Professor…"). Use SPEAKERS to complete the name, never on its own to guess. null when the transcript does not show who it was; a wrong name is worse than none. proposedByOrganisation: theirs from the transcript or SPEAKERS, else null.
 - deadline and amount: as said, or null.
 - theme: a few words for the topic, or null.
 - quote: the exact words it rests on, copied from the transcript (one or two sentences).
@@ -164,6 +172,7 @@ export function quoteLine(
 export function cleanFound(
   items: z.infer<typeof Found>['callsToAction'],
   lines: AnalysisLine[],
+  speakers: string[] = [],
 ): FoundCallToAction[] {
   const text = (v: string | null | undefined, max: number) =>
     v?.trim() ? v.trim().slice(0, max) : null;
@@ -175,13 +184,18 @@ export function cleanFound(
     if (!action || !directedAt || !quote) continue;
     const line = quoteLine(quote, lines, item.line);
     if (line === null) continue;
+    // a name nobody said and the programme does not list is dropped, not the call
+    const by = text(item.proposedBy, 200);
+    const grounded = by && nameIsGrounded(by, lines, speakers) ? by : null;
     out.push({
       type: item.type,
       action,
       shortText: text(item.shortText, 200) ?? action.slice(0, 200),
       directedAt,
-      proposedBy: text(item.proposedBy, 200),
-      proposedByOrganisation: text(item.proposedByOrganisation, 200),
+      proposedBy: grounded,
+      proposedByOrganisation: grounded
+        ? text(item.proposedByOrganisation, 200)
+        : null,
       deadline: text(item.deadline, 120),
       amount: text(item.amount, 120),
       theme: text(item.theme, 120),
@@ -265,7 +279,7 @@ export class ClaudeAnalysisProvider implements AnalysisProvider {
       );
       return [];
     }
-    const clean = cleanFound(found.callsToAction, lines);
+    const clean = cleanFound(found.callsToAction, lines, context.speakers);
     const dropped = found.callsToAction.length - clean.length;
     if (dropped > 0) {
       this.logger.warn(
@@ -274,6 +288,50 @@ export class ClaudeAnalysisProvider implements AnalysisProvider {
     }
     return clean;
   }
+  /**
+   * Who said each of a session's calls, from the transcript (see who-said-it).
+   * Only grounded, confident answers come back; a failure is no answers.
+   */
+  async whoSaid(
+    session: string,
+    speakers: string[],
+    lines: AnalysisLine[],
+    items: WhoItem[],
+  ): Promise<Map<string, { name: string; organisation: string | null }>> {
+    if (!this.client || !items.length) return new Map();
+    try {
+      const response = await this.client.beta.messages.parse({
+        model: this.model,
+        max_tokens: 8000,
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+        system: WHO_INSTRUCTIONS,
+        messages: [
+          {
+            role: 'user',
+            content: whoPrompt(session, speakers, lines, items),
+          },
+        ],
+        output_config: {
+          effort: 'medium',
+          format: betaZodOutputFormat(WhoAnswer),
+        },
+      });
+      if (!response.parsed_output) return new Map();
+      return cleanWho(
+        response.parsed_output,
+        new Set(items.map((i) => i.ref)),
+        lines,
+        speakers,
+      );
+    } catch (error) {
+      this.logger.warn(`who said it failed: ${(error as Error).message}`);
+      throw new ServiceUnavailableException(
+        'The AI could not read this session right now. Try again shortly.',
+      );
+    }
+  }
+
   /** One request: the whole stretch of transcript, answered in the `Found` shape. */
   private request(
     client: Anthropic,
