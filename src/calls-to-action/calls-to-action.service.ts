@@ -589,6 +589,11 @@ export class CallsToActionService {
         throw new BadRequestException('This session belongs to no event.');
       }
       const edition = await this.editions.findById(session.editionId);
+      // Reading it all again starts the AI's work over: its suggestions nobody
+      // has reviewed yet go (they may come from captions since moved or
+      // re-transcribed), and the reading replaces them. Anything a person has
+      // approved, rejected, edited, merged or added stays.
+      const replaced = fromStart ? await this.clearUnreviewed(sessionId) : 0;
       const cursor = await this.analyses.findOneBy({ sessionId });
       const rows = (await this.captions.fullTranscript(sessionId, 'en')).filter(
         (r) => fromStart || !cursor || r.createdAt > cursor.analysedUpTo,
@@ -656,13 +661,37 @@ export class CallsToActionService {
       return {
         added,
         read: lines.length,
-        message: added.length
-          ? `${added.length} ${added.length === 1 ? 'call to action' : 'calls to action'} suggested from ${lines.length} lines.`
-          : `No calls to action in the ${lines.length} ${fromStart ? '' : 'new '}lines.`,
+        message:
+          (added.length
+            ? `${added.length} ${added.length === 1 ? 'call to action' : 'calls to action'} suggested from ${lines.length} lines.`
+            : `No calls to action in the ${lines.length} ${fromStart ? '' : 'new '}lines.`) +
+          (replaced
+            ? ` ${replaced} earlier unreviewed suggestion${replaced === 1 ? '' : 's'} replaced.`
+            : ''),
       };
     } finally {
       this.running.delete(sessionId);
     }
+  }
+
+  /**
+   * Removes a session's AI suggestions no one has reviewed: still suggested,
+   * from the AI, never changed by a person, and not the one others were merged
+   * into. Returns how many went.
+   */
+  private async clearUnreviewed(sessionId: string): Promise<number> {
+    const rows = await this.dataSource.query<unknown[]>(
+      `DELETE FROM calls_to_action c
+        WHERE c."sessionId" = $1
+          AND c.status = 'suggested'
+          AND c.source = 'ai'
+          AND c."reviewedBy" IS NULL
+          AND NOT EXISTS (SELECT 1 FROM calls_to_action m WHERE m."mergedInto" = c.id)
+        RETURNING c.id`,
+      [sessionId],
+    );
+    // pg returns [rows, count] for DELETE ... RETURNING through TypeORM
+    return Array.isArray(rows[0]) ? (rows[0] as unknown[]).length : rows.length;
   }
 
   /** One added by hand: approved straight away, since a person wrote it. */
@@ -713,6 +742,28 @@ export class CallsToActionService {
    * Folds duplicates into one: the others are kept on record as merged, and
    * their speakers join the one kept, so the slide can say how many asked.
    */
+  /**
+   * Deletes calls to action of one event, and any merged into them (they
+   * only exist as part of the one kept). Calls of another event are left
+   * alone even if their ids are sent.
+   */
+  async removeMany(
+    editionId: string,
+    ids: string[],
+  ): Promise<{ deleted: number }> {
+    const rows = await this.dataSource.query<unknown[]>(
+      `DELETE FROM calls_to_action
+        WHERE "editionId" = $1
+          AND (id = ANY($2::uuid[]) OR "mergedInto" = ANY($2::uuid[]))
+        RETURNING id`,
+      [editionId, ids],
+    );
+    const deleted = Array.isArray(rows[0])
+      ? (rows[0] as unknown[]).length
+      : rows.length;
+    return { deleted };
+  }
+
   async merge(into: string, ids: string[], staffId: string) {
     const target = await this.one(into);
     if (target.status === 'merged') {

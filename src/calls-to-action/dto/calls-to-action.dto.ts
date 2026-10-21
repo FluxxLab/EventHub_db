@@ -124,6 +124,15 @@ export class MergeCallsToActionDto {
   ids: string[];
 }
 
+export class DeleteCallsToActionDto {
+  @ApiProperty({ type: [String], format: 'uuid' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @IsUUID('all', { each: true })
+  ids: string[];
+}
+
 /** What a deck covers: one session (a single slide) or one day (the full deck). */
 export class DeckScopeDto {
   @ApiPropertyOptional({

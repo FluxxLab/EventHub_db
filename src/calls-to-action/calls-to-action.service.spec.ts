@@ -171,6 +171,7 @@ function setup(
     ai,
     updates,
     rapporteur,
+    dataSource,
     analysis: () => analysis,
   };
 }
@@ -226,17 +227,53 @@ describe('calls to action', () => {
     expect(result.message).toBe('No calls to action in the 1 new lines.');
   });
 
-  it('reads the whole session again when asked to', async () => {
-    const { service, read } = setup({
+  it('reads the whole session again when asked to, replacing unreviewed AI suggestions', async () => {
+    const { service, read, dataSource } = setup({
       cursor: at(9),
       rows: [
         { s: 1, text: 'first' },
         { s: 5, text: 'second' },
       ],
     });
+    const query = (dataSource as unknown as { query: jest.Mock }).query;
+    query.mockResolvedValueOnce([[{ id: 'old1' }, { id: 'old2' }], 2]);
     const result = await service.analyse(SESSION, true);
     expect(read[0].map((l) => l.text)).toEqual(['first', 'second']);
-    expect(result.message).toBe('No calls to action in the 2 lines.');
+    expect(result.message).toBe(
+      'No calls to action in the 2 lines. 2 earlier unreviewed suggestions replaced.',
+    );
+    // only the AI's own, untouched suggestions for this session
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('DELETE FROM calls_to_action');
+    expect(sql).toContain(`c.status = 'suggested'`);
+    expect(sql).toContain(`c.source = 'ai'`);
+    expect(sql).toContain('"reviewedBy" IS NULL');
+    expect(params).toEqual([SESSION]);
+  });
+
+  it('deletes only this event’s calls, with any merged into them', async () => {
+    const { service, dataSource } = setup({ rows: [] });
+    const query = (dataSource as unknown as { query: jest.Mock }).query;
+    query.mockResolvedValueOnce([[{ id: 'a' }, { id: 'b' }, { id: 'm' }], 3]);
+    await expect(service.removeMany(EDITION, ['a', 'b'])).resolves.toEqual({
+      deleted: 3,
+    });
+    const [sql, params] = query.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('"editionId" = $1');
+    expect(sql).toContain('"mergedInto" = ANY');
+    expect(params).toEqual([EDITION, ['a', 'b']]);
+  });
+
+  it('keeps everything when only reading what is new', async () => {
+    const { service, dataSource } = setup({
+      cursor: at(5),
+      rows: [{ s: 8, text: 'new' }],
+    });
+    await service.analyse(SESSION);
+    const sqls = (
+      dataSource as unknown as { query: jest.Mock }
+    ).query.mock.calls.map((c) => c[0] as string);
+    expect(sqls.some((s) => s.includes('DELETE'))).toBe(false);
   });
 
   it('says so when nothing new was said, without asking the AI', async () => {

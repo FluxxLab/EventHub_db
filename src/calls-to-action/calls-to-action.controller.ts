@@ -22,6 +22,7 @@ import {
   AddStakeholderLinkDto,
   CreateCallToActionDto,
   DeckScopeDto,
+  DeleteCallsToActionDto,
   MergeCallsToActionDto,
   SaveCallToActionDto,
   SetStakeholderLinkDto,
@@ -197,6 +198,25 @@ export class CallsToActionController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.calls.update(id, user.id, dto);
+  }
+
+  @Post('editions/:id/calls-to-action/delete')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @Audit({
+    type: 'calls_to_action_deleted',
+    description: 'Calls to action deleted',
+  })
+  @ApiOperation({
+    summary:
+      'Delete calls to action of this event (and any merged into them), e.g. before analysing a session again',
+  })
+  removeMany(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeleteCallsToActionDto,
+  ) {
+    return this.calls.removeMany(id, dto.ids);
   }
 
   @Post('calls-to-action/merge')
