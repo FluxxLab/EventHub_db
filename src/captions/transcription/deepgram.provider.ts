@@ -124,7 +124,8 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
   ): Promise<UrlUtterance[]> {
     const response = await this.client.listen.v1.media.transcribeUrl(
       { url, ...DeepTranscriptionProvider.batchOptions(opts.keywords) },
-      { timeoutInSeconds: 900 },
+      // a whole day of a stream's audio takes minutes, not seconds
+      { timeoutInSeconds: 3600 },
     );
     return DeepTranscriptionProvider.turns(response);
   }

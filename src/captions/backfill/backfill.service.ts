@@ -25,8 +25,11 @@ import { TRANSCRIPTION_PROVIDER } from '../transcription/transcription.interface
 import type { TranscriptionProvider } from '../transcription/transcription.interface';
 import {
   BACKFILL_FOLDER,
+  COVER_AFTER_MS,
+  COVER_BEFORE_MS,
   isCovered,
   placeLines,
+  type PlacedLine,
   SESSION_LEAD_MS,
   SESSION_TAIL_MS,
 } from './backfill-plan';
@@ -41,6 +44,8 @@ export interface BackfillJob {
   durationMs: number;
   /** Server clock minus desk clock at submit, ms. */
   skewMs: number;
+  /** A stream's recording: its lines replace the live ones over its hours. */
+  replace?: boolean;
 }
 
 export interface BackfillResult {
@@ -115,6 +120,7 @@ export class BackfillService {
         startedAt: dto.startedAt,
         durationMs: dto.durationMs,
         skewMs,
+        ...(dto.replace ? { replace: true } : {}),
       },
       {
         jobId,
@@ -191,6 +197,9 @@ export class BackfillService {
 
     const rows: TranscriptSegment[] = [];
     const counts: BackfillResult['sessions'] = [];
+    if (job.replace)
+      return this.replaceLines(job, sessions, bySession, skipped);
+
     for (const [sessionId, lines] of bySession) {
       const session = sessions.find((s) => s.id === sessionId)!;
       const said = await this.saidTimes(
@@ -233,6 +242,65 @@ export class BackfillService {
       `back-fill ${job.key} (${job.room}): ${rows.length} line(s) added, ${skipped} skipped`,
     );
     return { inserted: rows.length, skipped, sessions: counts };
+  }
+
+  /**
+   * A stream's recording put in place of the live captions: in each session
+   * it covers, the machine lines said within the recording's stretch (and
+   * their translations) give way to the recording's, one clean pass with the
+   * voices told apart. Lines a person typed stay. Stored as ordinary lines,
+   * so speaker names apply to them.
+   */
+  private async replaceLines(
+    job: BackfillJob,
+    sessions: Session[],
+    bySession: Map<string, PlacedLine[]>,
+    unplaced: number,
+  ): Promise<BackfillResult> {
+    const rows: TranscriptSegment[] = [];
+    const counts: BackfillResult['sessions'] = [];
+    await this.segments.manager.transaction(async (manager) => {
+      for (const [sessionId, lines] of bySession) {
+        const session = sessions.find((s) => s.id === sessionId)!;
+        const from = new Date(
+          Math.min(...lines.map((l) => l.start)) - COVER_BEFORE_MS,
+        );
+        const to = new Date(
+          Math.max(...lines.map((l) => l.end)) + COVER_AFTER_MS,
+        );
+        await manager.query(
+          `DELETE FROM transcript_segments seg
+            WHERE seg."sessionId" = $1 AND seg.source = 'ai'
+              AND ${effectiveTimeSql('seg')} BETWEEN $2 AND $3`,
+          [sessionId, from.toISOString(), to.toISOString()],
+        );
+        for (const line of lines) {
+          rows.push(
+            this.segments.create({
+              sessionId,
+              room: session.room,
+              text: line.text,
+              speaker: line.speaker ?? null,
+              language: 'en',
+              source: TranscriptSource.AI,
+              backfill: false,
+              offsetMs: null,
+              createdAt: new Date(line.start),
+            }),
+          );
+        }
+        counts.push({
+          id: sessionId,
+          title: session.title,
+          inserted: lines.length,
+        });
+      }
+      if (rows.length > 0) await manager.save(TranscriptSegment, rows);
+    });
+    this.logger.log(
+      `re-caption ${job.key} (${job.room}): ${rows.length} line(s) in ${counts.length} session(s), ${unplaced} outside any session`,
+    );
+    return { inserted: rows.length, skipped: unplaced, sessions: counts };
   }
 
   /** Deletes the uploaded recording; it is only ever read once. */

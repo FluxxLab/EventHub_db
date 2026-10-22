@@ -1,6 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  IsBoolean,
   IsIn,
+  IsOptional,
   IsInt,
   IsISO8601,
   IsNumber,
@@ -12,10 +14,23 @@ import {
 } from 'class-validator';
 import { BACKFILL_KEY_PATTERN } from './backfill-plan';
 
-/** What a capture desk records in, as MediaRecorder names it. */
-export const BACKFILL_CONTENT_TYPES = ['audio/webm', 'audio/ogg'] as const;
-/** About three hours of desk Opus; anything bigger is not one piece. */
-export const BACKFILL_MAX_BYTES = 200_000_000;
+/**
+ * What a capture desk records in, as MediaRecorder names it, and what a
+ * stream's recording comes as (YouTube's audio is m4a; a video file works too).
+ */
+export const BACKFILL_CONTENT_TYPES = [
+  'audio/webm',
+  'audio/ogg',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/mpeg',
+  'audio/aac',
+  'audio/wav',
+  'video/mp4',
+  'video/webm',
+] as const;
+/** A whole day of a stream's audio fits; the caption service takes files up to 2 GB. */
+export const BACKFILL_MAX_BYTES = 2_000_000_000;
 /** Longest piece a desk may say it recorded. */
 export const BACKFILL_MAX_DURATION_MS = 24 * 60 * 60_000;
 
@@ -69,4 +84,13 @@ export class BackfillSubmitDto {
   })
   @IsISO8601({ strict: true })
   deskNow: string;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Replace the live captions over the recording's hours with its lines (a stream's recording), instead of only filling gaps",
+  })
+  @IsOptional()
+  @IsBoolean()
+  replace?: boolean;
 }

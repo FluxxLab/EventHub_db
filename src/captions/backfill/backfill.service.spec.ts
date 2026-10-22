@@ -27,6 +27,7 @@ function build(
       .mockResolvedValue((opts.said ?? []).map((at) => ({ at: String(at) }))),
   };
   const saved: unknown[] = [];
+  const deleted: { sql: string; params: unknown[] }[] = [];
   const segments = {
     create: jest.fn((v: unknown) => v),
     createQueryBuilder: jest.fn(() => saidQb),
@@ -38,6 +39,10 @@ function build(
             saved.push(...rows);
             return Promise.resolve(rows);
           }),
+          query: (sql: string, params: unknown[]) => {
+            deleted.push({ sql, params });
+            return Promise.resolve([]);
+          },
         }),
     },
   };
@@ -78,6 +83,7 @@ function build(
     transcription,
     sessionQb,
     saved,
+    deleted,
     realtime,
   };
 }
@@ -237,6 +243,44 @@ describe('BackfillService job', () => {
       's.editionId = :editionId',
       { editionId: 'ed-1' },
     );
+  });
+
+  it('replaces the live captions over a stream recording’s hours, every line kept', async () => {
+    const t = build({
+      sessions: [panel],
+      said: [T0 + 10 * 60_000 + 5_000],
+      utterances: [
+        { text: 'Welcome everyone', speaker: 0, startMs: 0, endMs: 2_000 },
+        {
+          text: 'Captioned live too',
+          speaker: 1,
+          startMs: 4_000,
+          endMs: 5_000,
+        },
+      ],
+    });
+    const result = await t.service.run({
+      room: 'Hall A',
+      key: KEY,
+      startedAt: new Date(T0 + 10 * 60_000).toISOString(),
+      durationMs: 3_600_000,
+      skewMs: 0,
+      replace: true,
+    });
+    expect(result).toEqual({
+      inserted: 2,
+      skipped: 0,
+      sessions: [{ id: 'panel', title: 'Opening panel', inserted: 2 }],
+    });
+    // the live machine lines in that stretch go, a person's stay
+    expect(t.deleted).toHaveLength(1);
+    expect(t.deleted[0].sql).toContain(`source = 'ai'`);
+    expect(t.deleted[0].params[0]).toBe('panel');
+    // ordinary lines, so speaker names apply to them
+    expect(t.saved).toEqual([
+      expect.objectContaining({ text: 'Welcome everyone', backfill: false }),
+      expect.objectContaining({ text: 'Captioned live too', backfill: false }),
+    ]);
   });
 
   it('does not pay to transcribe when no session ran in the room', async () => {
