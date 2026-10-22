@@ -738,7 +738,8 @@ export class SpeakerNamesService {
     // an organiser's own request, after the room has moved on, so it names
     // everyone it hears introduced whatever the switch says.
     const setting: ReviewNaming =
-      session.status === SessionStatus.COMPLETED
+      session.status === SessionStatus.COMPLETED ||
+      new Date(session.endsAt).getTime() < Date.now()
         ? 'finished'
         : await this.settingFor(session);
     if (setting === 'off') return { added: 0, changed: 0 };

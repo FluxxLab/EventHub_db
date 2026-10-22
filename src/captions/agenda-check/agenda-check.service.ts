@@ -146,10 +146,10 @@ export class AgendaCheckService {
     room: string,
   ): Promise<AgendaCheckResult> {
     const agenda = await this.agenda(editionId, day, room);
-    const started = agenda.filter((s) => s.status !== 'scheduled');
+    // every session with captions: one never switched on can hold them too (captions follow the programme)
     const lines: FiledLine[] = [];
     const counts = new Map<string, number>();
-    for (const s of started) {
+    for (const s of agenda) {
       const rows = await this.captions.fullTranscript(s.id);
       counts.set(s.id, rows.length);
       for (const r of rows)
@@ -163,12 +163,14 @@ export class AgendaCheckService {
     const base = {
       room,
       day,
-      sessions: started.map((s) => ({
-        id: s.id,
-        title: s.title,
-        startsAt: s.startsAt.toISOString(),
-        lines: counts.get(s.id) ?? 0,
-      })),
+      sessions: agenda
+        .filter((s) => s.status !== 'scheduled' || (counts.get(s.id) ?? 0) > 0)
+        .map((s) => ({
+          id: s.id,
+          title: s.title,
+          startsAt: s.startsAt.toISOString(),
+          lines: counts.get(s.id) ?? 0,
+        })),
     };
     const turns = toTurns(lines);
     if (!turns.length) return { ...base, fits: [], fixes: [] };

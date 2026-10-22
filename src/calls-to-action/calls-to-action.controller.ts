@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  ParseIntPipe,
   Query,
 } from '@nestjs/common';
 import { ApiQuery } from '@nestjs/swagger';
@@ -18,6 +19,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { EditionScoped } from '../common/edition-scope/edition-scope.decorator';
 import { AccessTier } from '../delegate/entities/delegate.entity';
 import { CallsToActionService } from './calls-to-action.service';
+import { NightlyTidyService } from './nightly/nightly-tidy.service';
 import {
   AddStakeholderLinkDto,
   CreateCallToActionDto,
@@ -33,7 +35,10 @@ import {
 @ApiBearerAuth()
 @Controller()
 export class CallsToActionController {
-  constructor(private readonly calls: CallsToActionService) {}
+  constructor(
+    private readonly calls: CallsToActionService,
+    private readonly nightly: NightlyTidyService,
+  ) {}
 
   @Get('editions/:id/calls-to-action')
   @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
@@ -105,6 +110,38 @@ export class CallsToActionController {
   })
   targets(@Param('id', ParseUUIDPipe) id: string) {
     return this.calls.targets(id);
+  }
+
+  @Get('editions/:id/nightly-tidy')
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @ApiOperation({
+    summary:
+      'The overnight tidy of a day: what it moved, what it left for a person, names, analysis and speakers found',
+  })
+  nightlyTidy(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('day', ParseIntPipe) day: number,
+  ) {
+    return this.nightly.result(id, day);
+  }
+
+  @Post('editions/:id/nightly-tidy')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @Audit({
+    type: 'nightly_tidy_run',
+    description: 'Day tidied (agenda check, names, analysis, speakers)',
+  })
+  @ApiOperation({
+    summary: 'Run the overnight tidy for a day now; poll GET for its progress',
+  })
+  runNightlyTidy(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('day', ParseIntPipe) day: number,
+  ) {
+    return this.nightly.runNow(id, day);
   }
 
   @Post('sessions/:id/analyse')

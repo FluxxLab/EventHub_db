@@ -10,6 +10,7 @@ import { ClaudeDeckDesigner } from './deck/deck-designer';
 import { ClaudeRapporteurWriter } from './report/rapporteur-writer';
 import { CallsToActionController } from './calls-to-action.controller';
 import { CallsToActionService } from './calls-to-action.service';
+import { NightlyTidyService } from './nightly/nightly-tidy.service';
 import { CallToAction } from './entities/call-to-action.entity';
 import { SessionAnalysis } from './entities/session-analysis.entity';
 import { StakeholderLink } from './entities/stakeholder-link.entity';
@@ -26,6 +27,8 @@ import { ClaudeStakeholderLinker } from './stakeholder-linker';
   controllers: [CallsToActionController],
   providers: [
     CallsToActionService,
+    // the day tidied overnight
+    NightlyTidyService,
     { provide: ANALYSIS_PROVIDER, useClass: ClaudeAnalysisProvider },
     // the deck's design, and the event's logo and cover it is drawn with
     ClaudeDeckDesigner,

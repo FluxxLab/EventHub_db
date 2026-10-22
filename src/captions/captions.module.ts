@@ -104,6 +104,12 @@ import { SpeakerReviewProcessor } from './speaker-names/speaker-review.processor
           : new NoopTranslationProvider(),
     },
   ],
-  exports: [CaptionsService, LivekitService, SpeakerNamesService],
+  exports: [
+    CaptionsService,
+    LivekitService,
+    SpeakerNamesService,
+    // the night's tidy-up runs it for every room
+    AgendaCheckService,
+  ],
 })
 export class CaptionsModule {}
