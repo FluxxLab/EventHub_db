@@ -123,7 +123,14 @@ function build(redis = new FakeRedis(), settings: Record<string, string> = {}) {
     create: jest.fn((v: unknown) => v),
     manager: { query: jest.fn() },
   };
-  const session = { findLiveInRoom: jest.fn().mockResolvedValue({ id: 's1' }) };
+  const findLiveInRoom = jest.fn().mockResolvedValue({ id: 's1' });
+  // captions go to the live session, else the scheduled one; here the live one stands for both
+  const session = {
+    findLiveInRoom,
+    findCaptionSession: jest.fn((room: string, fresh?: boolean) =>
+      findLiveInRoom(room, fresh),
+    ),
+  };
   const realtime = { emitToRoom: jest.fn(), emitGlobal: jest.fn() };
   const archiveQueue = {
     add: jest.fn().mockResolvedValue({}),

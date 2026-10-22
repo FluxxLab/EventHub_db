@@ -217,6 +217,8 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
   private readonly minFreeDiskBytes: number;
   /** CAPTIONS_PREROLL_MS; defaults to one sync interval and a second. */
   private readonly prerollMs: number;
+  /** Captions follow the programme when nothing is live (CAPTIONS_FOLLOW_PROGRAMME, on unless 'off'). */
+  private readonly followProgramme: boolean;
   /** Lock and live-ops status are refreshed at most this often while audio flows. */
   static readonly LOCK_REFRESH_MS = 5_000;
   /** Interims per room: at most one per this many ms. Finals are never held. */
@@ -350,6 +352,9 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
       'CAPTIONS_PREROLL_MS',
       this.syncMs + 1_000,
     );
+    this.followProgramme =
+      config?.get<string>('CAPTIONS_FOLLOW_PROGRAMME')?.trim().toLowerCase() !==
+      'off';
     /**
      * TRANSLATION_CONCURRENCY caps model calls in flight on this instance
      * across every room. Four covers ten rooms: a room finishes a sentence
@@ -517,6 +522,17 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
    * taken and every SYNC_MS after, against the database rather than the
    * sessions cache, which another replica's status change does not clear.
    */
+  /**
+   * The session a room's captions go to: the live one, else (unless
+   * CAPTIONS_FOLLOW_PROGRAMME=off) the one the programme has there now, so
+   * a session nobody switched on is still captioned rather than lost.
+   */
+  private targetFor(room: string, fresh = false) {
+    return this.followProgramme
+      ? this.session.findCaptionSession(room, fresh)
+      : this.session.findLiveInRoom(room, fresh);
+  }
+
   async syncRoom(room: string): Promise<void> {
     room = this.canonical(room);
     if (this.syncing.has(room)) return;
@@ -524,7 +540,7 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
     try {
       const held = this.held.get(room);
       if (!held) return;
-      const live = await this.session.findLiveInRoom(room, true);
+      const live = await this.targetFor(room, true);
       if (this.held.get(room) !== held) return; // stopped meanwhile
       const open = this.activeRooms.has(room) || this.pendingAudio.has(room);
       if (open && live?.id === held.sessionId) return;
@@ -956,8 +972,8 @@ export class CaptionsService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     // Cached for a few seconds in SessionsService: this runs for every
     // fragment, several a second per room.
-    const session = await this.session.findLiveInRoom(room);
-    if (!session) return; // break time - nothing live in this room, drop the fragment
+    const session = await this.targetFor(room);
+    if (!session) return; // nothing live and nothing on the programme now: a break, drop the fragment
 
     const said = new Date(seq);
     const mic = event.channel === undefined ? null : event.channel + 1;

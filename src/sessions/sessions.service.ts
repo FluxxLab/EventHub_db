@@ -1,3 +1,8 @@
+import {
+  pickScheduled,
+  SCHEDULE_EARLY_MS,
+  SCHEDULE_OVERRUN_MS,
+} from './scheduled-session';
 import { CatalogService } from '../catalog/catalog.service';
 import {
   BadRequestException,
@@ -481,6 +486,7 @@ export class SessionsService implements OnApplicationBootstrap {
   /** Drop every cached room -> live session answer on this instance. */
   invalidateLiveRooms(): void {
     this.liveRoomCache.clear();
+    this.scheduledRoomCache.clear();
   }
 
   /**
@@ -507,6 +513,60 @@ export class SessionsService implements OnApplicationBootstrap {
       }
     });
     return session;
+  }
+
+  private readonly scheduledRoomCache = new Map<
+    string,
+    { at: number; session: Promise<Session | null> }
+  >();
+
+  /**
+   * Where a room's captions go: the session live in it, else the one the
+   * programme has in it now. Operators switch sessions by hand and sometimes
+   * forget; captions with nothing live used to be dropped, and whatever was
+   * said was lost. Filed under the scheduled session instead, a stretch can
+   * be moved to where it belongs later (the agenda check), but only if it was
+   * kept at all.
+   */
+  async findCaptionSession(
+    room: string,
+    fresh = false,
+  ): Promise<Session | null> {
+    const live = await this.findLiveInRoom(room, fresh);
+    if (live) return live;
+    const key = room.trim().toLowerCase();
+    const now = Date.now();
+    const hit = this.scheduledRoomCache.get(key);
+    if (!fresh && hit && now - hit.at < SessionsService.LIVE_ROOM_TTL_MS) {
+      return hit.session;
+    }
+    const session = this.queryScheduledInRoom(room, new Date(now));
+    this.scheduledRoomCache.set(key, { at: now, session });
+    session.catch(() => {
+      if (this.scheduledRoomCache.get(key)?.session === session) {
+        this.scheduledRoomCache.delete(key);
+      }
+    });
+    return session;
+  }
+
+  private async queryScheduledInRoom(
+    room: string,
+    now: Date,
+  ): Promise<Session | null> {
+    const editionId = await this.currentEditionId();
+    const qb = this.sessions
+      .createQueryBuilder('s')
+      .leftJoinAndSelect('s.speakers', 'speaker')
+      .where('LOWER(TRIM(s.room)) = LOWER(TRIM(:room))', { room })
+      .andWhere('s.startsAt <= :late', {
+        late: new Date(now.getTime() + SCHEDULE_EARLY_MS),
+      })
+      .andWhere('s.endsAt >= :early', {
+        early: new Date(now.getTime() - SCHEDULE_OVERRUN_MS),
+      });
+    if (editionId) qb.andWhere('s.editionId = :editionId', { editionId });
+    return pickScheduled(await qb.getMany(), now);
   }
 
   private async queryLiveInRoom(room: string): Promise<Session | null> {
