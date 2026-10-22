@@ -1,4 +1,5 @@
 import { quoteLine } from './analysis/claude.provider';
+import { spellAsKnown, type KnownName } from './analysis/known-names';
 import {
   BadRequestException,
   ConflictException,
@@ -630,18 +631,22 @@ export class CallsToActionService {
         alreadyRecorded: recorded.map((r) => r.shortText),
         brief: (await this.sessions.brief(sessionId)).text,
       });
+      const known = found.some((f) => f.proposedBy)
+        ? await this.knownNames(session.editionId)
+        : [];
       const added = found.length
         ? await this.calls.save(
             found.map((f) =>
               this.calls.create({
+                ...byline(
+                  spellAsKnown(f.proposedBy, f.proposedByOrganisation, known),
+                ),
                 editionId: session.editionId!,
                 sessionId,
                 type: f.type,
                 action: f.action,
                 shortText: f.shortText,
                 directedAt: f.directedAt,
-                proposedBy: f.proposedBy,
-                proposedByOrganisation: f.proposedByOrganisation,
                 deadline: f.deadline,
                 amount: f.amount,
                 theme: f.theme,
@@ -673,6 +678,36 @@ export class CallsToActionService {
     } finally {
       this.running.delete(sessionId);
     }
+  }
+
+  /**
+   * The names known for an event, most trusted first: the programme's
+   * speakers, then names on calls a person has approved or corrected (latest
+   * first). AI-found names are spelled to match these (see known-names).
+   */
+  async knownNames(editionId: string | null): Promise<KnownName[]> {
+    if (!editionId) return [];
+    const speakers = await this.dataSource.query<KnownName[]>(
+      `SELECT DISTINCT TRIM(sp.name) AS name, NULLIF(TRIM(sp.organisation), '') AS organisation
+         FROM sessions s
+         JOIN session_speakers ss ON ss."sessionsId" = s.id
+         JOIN speakers sp ON sp.id = ss."speakersId"
+        WHERE s."editionId" = $1 AND COALESCE(TRIM(sp.name), '') <> ''`,
+      [editionId],
+    );
+    const reviewed = await this.dataSource.query<KnownName[]>(
+      `SELECT TRIM(c."proposedBy") AS name, NULLIF(TRIM(c."proposedByOrganisation"), '') AS organisation
+         FROM calls_to_action c
+        WHERE c."editionId" = $1
+          AND c."reviewedBy" IS NOT NULL
+          AND c.status IN ('suggested', 'approved')
+          AND COALESCE(TRIM(c."proposedBy"), '') <> ''
+        ORDER BY c."updatedAt" DESC`,
+      [editionId],
+    );
+    return [...speakers, ...reviewed].filter(
+      (k) => typeof k.name === 'string' && k.name.trim() !== '',
+    );
   }
 
   /**
@@ -747,14 +782,16 @@ export class CallsToActionService {
       s.organisation ? `${s.name} (${s.organisation})` : s.name,
     );
     const found = await this.ai.whoSaid(session.title, speakers, lines, items);
+    const known = found.size ? await this.knownNames(session.editionId) : [];
     let filled = 0;
     for (let i = 0; i < unnamed.length; i++) {
       const who = found.get(items[i].ref);
       if (!who) continue;
+      const spelled = spellAsKnown(who.name, who.organisation, known);
       await this.calls.update(unnamed[i].id, {
-        proposedBy: who.name,
+        proposedBy: spelled.name,
         proposedByOrganisation:
-          unnamed[i].proposedByOrganisation ?? who.organisation,
+          unnamed[i].proposedByOrganisation ?? spelled.organisation,
       });
       filled++;
     }
@@ -897,3 +934,9 @@ export class CallsToActionService {
     return out;
   }
 }
+
+/** A spelled name as a call's byline columns. */
+const byline = (n: { name: string | null; organisation: string | null }) => ({
+  proposedBy: n.name,
+  proposedByOrganisation: n.name ? n.organisation : null,
+});
