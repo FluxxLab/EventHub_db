@@ -14,6 +14,9 @@ import { CaptionsArchiveProcessor } from './captions-archive.processor';
 import { CaptionsGapfillProcessor } from './captions-gapfill.processor';
 import { CaptionsService } from './captions.service';
 import { AgendaCheckService } from './agenda-check/agenda-check.service';
+import { DeskRemoteController } from './desk-remote/desk-remote.controller';
+import { DeskRemoteGateway } from './desk-remote/desk-remote.gateway';
+import { DeskRemoteService } from './desk-remote/desk-remote.service';
 import {
   IngestController,
   LivekitWebhookController,
@@ -57,6 +60,7 @@ import { SpeakerReviewProcessor } from './speaker-names/speaker-review.processor
   controllers: [
     // before CaptionsController, whose :sessionId routes are looser
     BackfillController,
+    DeskRemoteController,
     SpeakerNamesController,
     CaptionsController,
     IngestController,
@@ -67,6 +71,8 @@ import { SpeakerReviewProcessor } from './speaker-names/speaker-review.processor
   providers: [
     CaptionsService,
     AgendaCheckService,
+    DeskRemoteService,
+    DeskRemoteGateway,
     CaptionsGateway,
     CaptionsArchiveProcessor,
     CaptionsGapfillProcessor,
