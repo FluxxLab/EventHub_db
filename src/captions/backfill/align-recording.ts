@@ -154,6 +154,7 @@ export function findPiecewiseOffset(
     const x = found[i];
     if (x !== null && Math.abs(x - median) > MAX_DRIFT_MS) found[i] = null;
   }
+  keepInOrder(found);
   const matched = found.filter((x) => x !== null).length;
   if (matched === 0) return null;
   const offsets: number[] = [];
@@ -163,6 +164,40 @@ export function findPiecewiseOffset(
     offsets.push(prev ?? (found.find((x) => x !== null) as number));
   }
   return { offsets, matched, pieces };
+}
+
+/** How far a piece may sit before the one ahead of it: matching is good to a few seconds. */
+const ORDER_SLACK_MS = 30_000;
+
+/**
+ * A stream's clock only moves forward: a break makes the next piece later, never earlier. A
+ * piece whose answer puts it back over the one before (so two parts of the talk would share the
+ * same minutes) disagrees with its neighbours; keep the longest run of pieces that agree with
+ * each other, in order, and clear the rest so they borrow from the piece before them.
+ */
+function keepInOrder(found: (number | null)[]): void {
+  const idx = found.flatMap((x, i) => (x === null ? [] : [i]));
+  // longest chain of pieces whose shifts never step back
+  const best = idx.map(() => 1);
+  const from = idx.map(() => -1);
+  for (let b = 0; b < idx.length; b++) {
+    for (let a = 0; a < b; a++) {
+      if (
+        found[idx[a]]! <= found[idx[b]]! + ORDER_SLACK_MS &&
+        best[a] + 1 > best[b]
+      ) {
+        best[b] = best[a] + 1;
+        from[b] = a;
+      }
+    }
+  }
+  let at = best.indexOf(Math.max(...best));
+  const keep = new Set<number>();
+  while (at >= 0) {
+    keep.add(idx[at]);
+    at = from[at];
+  }
+  for (const i of idx) if (!keep.has(i)) found[i] = null;
 }
 
 /** The offset that applies at a point in the recording. */

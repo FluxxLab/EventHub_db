@@ -341,7 +341,7 @@ export class BackfillService {
     const end = givenStart + job.durationMs + lastShift;
     if (found) {
       this.logger.log(
-        `re-caption ${job.key} (${job.room}): ${found.matched}/${found.pieces} piece(s) matched, shifts ${[...new Set(found.offsets.map((o) => Math.round(o / 1000)))].join(', ')} s`,
+        `re-caption ${job.key} (${job.room}): ${found.matched}/${found.pieces} piece(s) matched, shifts by piece ${found.offsets.map((o) => Math.round(o / 60_000)).join(', ')} min`,
       );
     }
     // each line moved by its own piece's shift

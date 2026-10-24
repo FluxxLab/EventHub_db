@@ -127,6 +127,27 @@ describe('finding a long recording piece by piece', () => {
     expect(offsetAt(found, PIECE + 60_000)).toBe(found.offsets[1]);
   });
 
+  it('never lays a piece back over the one before it', () => {
+    // piece 2 matched 12 minutes too early: it and piece 1 would share the same minutes
+    const back = 12 * 60_000;
+    const live = rec.map((l) => ({
+      text: l.text,
+      at:
+        start +
+        l.startMs +
+        2_000 -
+        (l.startMs >= 2 * PIECE && l.startMs < 3 * PIECE ? back : 0),
+    }));
+    const found = findPiecewiseOffset(rec, live, start)!;
+    expect(found.matched).toBe(3);
+    expect(Math.abs(found.offsets[2] - found.offsets[1])).toBeLessThan(10_000);
+    for (let i = 1; i < found.offsets.length; i++) {
+      expect(found.offsets[i]).toBeGreaterThanOrEqual(
+        found.offsets[i - 1] - 30_000,
+      );
+    }
+  });
+
   it('gives no answer when no piece matches', () => {
     expect(findPiecewiseOffset(rec, [], start)).toBeNull();
   });
