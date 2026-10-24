@@ -289,22 +289,48 @@ export class BackfillService {
     });
 
     // the recording's own distinctive lines: copies of them elsewhere come from an earlier run
-    const copies = new Set(
-      utterances
-        .map((u) => plainText(u.text))
-        .filter((t) => t.split(' ').length >= COPY_MIN_WORDS),
-    );
+    // the recording's own lines, by text, with where an earlier run given
+    // this same start would have stored them
+    const said = new Map<string, number[]>();
+    for (const u of utterances) {
+      const t = plainText(u.text);
+      said.set(t, [...(said.get(t) ?? []), givenStart + u.startMs]);
+    }
+    /** A stored line that is this recording's own, left by an earlier run. */
+    const isCopy = (l: { text: string; at: number }) => {
+      const t = plainText(l.text);
+      const at = said.get(t);
+      if (!at) return false;
+      return (
+        t.split(' ').length >= COPY_MIN_WORDS ||
+        at.some((x) => Math.abs(x - l.at) <= 3_000)
+      );
+    };
     const ids = roomSessions.map((s) => s.id);
     const heard = await this.roomLines(
       ids,
       givenStart - SEARCH_MS,
       givenStart + job.durationMs + SEARCH_MS,
     );
-    const found = findOffset(
-      utterances,
-      heard.filter((l) => !copies.has(plainText(l.text))),
-      givenStart,
+    // matched only against what was heard live: anything worded exactly
+    // like the recording is likely an earlier run's copy, and would pull the
+    // answer towards wherever that run put it
+    const live = heard.filter(
+      (l) => l.source === 'ai' && !said.has(plainText(l.text)),
     );
+    const found = findOffset(utterances, live, givenStart);
+    // Unchecked, a wrong start replaces live captions with the wrong ones.
+    // Go ahead only when there are none to lose where it would land.
+    if (!found) {
+      const atRisk = live.filter(
+        (l) => l.at >= givenStart && l.at <= givenStart + job.durationMs,
+      ).length;
+      if (atRisk > 0) {
+        throw new UnrecoverableError(
+          `The recording could not be matched to the live captions, so its start time could not be checked, and ${atRisk} live lines would be replaced. Nothing was changed. Check the start time and the room.`,
+        );
+      }
+    }
     const start = found ? givenStart + found.offsetMs : givenStart;
     if (found && Math.abs(found.offsetMs) > 60_000) {
       this.logger.warn(
@@ -356,7 +382,7 @@ export class BackfillService {
           manager,
         )
       )
-        .filter((l) => l.source === 'ai' && copies.has(plainText(l.text)))
+        .filter((l) => l.source === 'ai' && isCopy(l))
         .map((l) => l.id);
       for (let i = 0; i < stale.length; i += 500) {
         await manager.query(

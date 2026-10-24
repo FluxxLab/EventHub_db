@@ -375,6 +375,110 @@ describe('BackfillService job', () => {
     expect(t.deleted[1].params[0]).toEqual(['old-copy']);
   });
 
+  it('finds the true start even when an earlier run left copies at the wrong time, and removes them all', async () => {
+    const said = [
+      'good afternoon everyone and welcome to the innovation showcase this evening',
+      'out of three hundred and forty three applications we shortlisted eighty nine',
+      'there was a further review that was double blinded and done twice over',
+      'we serve more than one hundred and twenty thousand students in Nigeria today',
+      'thank you',
+    ];
+    const given = T0 + 10 * 60_000;
+    const trueStart = given + 6.5 * 3_600_000;
+    const utterances = said.map((text, i) => ({
+      text,
+      startMs: i * 30_000,
+      endMs: i * 30_000 + 20_000,
+    }));
+    const t = build({
+      sessions: [
+        panel,
+        {
+          ...panel,
+          id: 'late',
+          title: 'Afternoon',
+          startsAt: new Date(trueStart - 600_000),
+          endsAt: new Date(trueStart + 3_600_000),
+        },
+      ],
+      utterances,
+      heard: [
+        // the earlier run's copies, word for word, where the given start put them
+        ...said.map((text, i) => ({
+          id: `copy${i}`,
+          text,
+          source: 'ai',
+          at: given + i * 30_000,
+        })),
+        // what was heard live, in pieces, at the true time
+        ...said.slice(0, 4).flatMap((text, i) => {
+          const ws = text.split(' ');
+          return [
+            {
+              id: `l${i}a`,
+              text: ws.slice(0, 6).join(' '),
+              source: 'ai',
+              at: trueStart + i * 30_000 + 2_000,
+            },
+            {
+              id: `l${i}b`,
+              text: ws.slice(6).join(' '),
+              source: 'ai',
+              at: trueStart + i * 30_000 + 9_000,
+            },
+          ];
+        }),
+      ],
+    });
+    const result = await t.service.run({
+      room: 'Hall A',
+      key: KEY,
+      startedAt: new Date(given).toISOString(),
+      durationMs: 3_600_000,
+      skewMs: 0,
+      replace: true,
+    });
+    expect(Math.abs((result.shiftedMs ?? 0) - 6.5 * 3_600_000)).toBeLessThan(
+      10_000,
+    );
+    // every copy goes, the short "thank you" too, as it sits exactly where that run put it
+    expect(result.staleRemoved).toBe(5);
+    expect(result.sessions.map((s) => s.id)).toEqual(['late']);
+  });
+
+  it('changes nothing when the start cannot be checked and live captions would be replaced', async () => {
+    const t = build({
+      sessions: [panel],
+      utterances: [
+        {
+          text: 'words the live captions never heard at all today',
+          startMs: 0,
+          endMs: 3_000,
+        },
+      ],
+      heard: [
+        {
+          id: 'live',
+          text: 'something quite different was said in the room',
+          source: 'ai',
+          at: T0 + 10 * 60_000 + 5_000,
+        },
+      ],
+    });
+    await expect(
+      t.service.run({
+        room: 'Hall A',
+        key: KEY,
+        startedAt: new Date(T0 + 10 * 60_000).toISOString(),
+        durationMs: 60_000,
+        skewMs: 0,
+        replace: true,
+      }),
+    ).rejects.toThrow('Nothing was changed');
+    expect(t.deleted).toHaveLength(0);
+    expect(t.saved).toHaveLength(0);
+  });
+
   it('does not pay to transcribe when no session ran in the room', async () => {
     const t = build({ sessions: [] });
     await expect(
