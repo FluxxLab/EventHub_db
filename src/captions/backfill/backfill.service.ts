@@ -343,7 +343,7 @@ export class BackfillService {
       // the room's machine lines over the stretch, in any session
       await manager.query(
         `DELETE FROM transcript_segments seg
-          WHERE seg."sessionId" = ANY($1::uuid[]) AND seg.source = 'ai'
+          WHERE seg."sessionId" = ANY($1::varchar[]) AND seg.source = 'ai'
             AND ${effectiveTimeSql('seg')} BETWEEN $2 AND $3`,
         [ids, from.toISOString(), to.toISOString()],
       );
@@ -425,7 +425,7 @@ export class BackfillService {
     >(
       `SELECT seg.id, seg.text, seg.source, ${effectiveTimeSql('seg')} AS at
          FROM transcript_segments seg
-        WHERE seg."sessionId" = ANY($1::uuid[]) AND seg.language = 'en'
+        WHERE seg."sessionId" = ANY($1::varchar[]) AND seg.language = 'en'
           AND ${effectiveTimeSql('seg')} BETWEEN $2 AND $3`,
       [sessionIds, new Date(from).toISOString(), new Date(to).toISOString()],
     );
