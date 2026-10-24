@@ -1,4 +1,9 @@
-import { BASE_TERMS, captionTerms, MAX_TERMS } from './caption-terms';
+import {
+  BASE_TERMS,
+  captionTerms,
+  MAX_TERMS,
+  withinTermBudget,
+} from './caption-terms';
 
 /** What a session's captions listen for: the organisers' words, the event, and who is on stage. */
 describe('caption terms', () => {
@@ -35,5 +40,29 @@ describe('caption terms', () => {
 
   it('still listens for the base terms with nothing else known', () => {
     expect(captionTerms({})).toEqual(BASE_TERMS);
+  });
+});
+
+describe('the key-term budget', () => {
+  it('keeps terms in order until the budget is spent', () => {
+    const terms = Array.from(
+      { length: 100 },
+      (_, i) => `Speaker Name Number ${i} Organisation`,
+    );
+    const kept = withinTermBudget(terms);
+    const cost = kept.reduce(
+      (n, t) => n + Math.max(t.split(' ').length, Math.ceil(t.length / 3)),
+      0,
+    );
+    expect(cost).toBeLessThanOrEqual(400);
+    expect(kept[0]).toBe(terms[0]);
+    expect(kept.length).toBeLessThan(terms.length);
+  });
+
+  it('keeps a short list whole', () => {
+    expect(withinTermBudget(['NITDA', 'Bosun Tijani'])).toEqual([
+      'NITDA',
+      'Bosun Tijani',
+    ]);
   });
 });

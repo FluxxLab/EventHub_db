@@ -40,3 +40,29 @@ export function captionTerms(input: {
   for (const t of BASE_TERMS) add(t);
   return [...seen.values()].slice(0, MAX_TERMS);
 }
+
+/** Deepgram refuses more than 500 tokens across all key terms; this leaves room for its own counting. */
+export const MAX_TERM_TOKENS = 400;
+
+/**
+ * As many terms as fit Deepgram's token budget, in order. A term's tokens are
+ * estimated generously (a word, or one per three letters, whichever is more),
+ * since names split into several tokens.
+ */
+export function withinTermBudget(
+  terms: string[],
+  budget = MAX_TERM_TOKENS,
+): string[] {
+  const out: string[] = [];
+  let used = 0;
+  for (const term of terms) {
+    const cost = Math.max(
+      term.trim().split(/\s+/).length,
+      Math.ceil(term.length / 3),
+    );
+    if (used + cost > budget) continue;
+    used += cost;
+    out.push(term);
+  }
+  return out;
+}

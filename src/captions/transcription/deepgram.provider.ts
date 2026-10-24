@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { BleedFilter } from './bleed-filter';
+import { withinTermBudget } from '../caption-terms';
 import { ConfigService } from '@nestjs/config';
 import { DeepgramClient } from '@deepgram/sdk';
 import { createReadStream } from 'node:fs';
@@ -141,7 +142,7 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
       profanity_filter: true,
       diarize_model: 'v2' as const,
       utterances: true,
-      keyterm: keywords,
+      keyterm: withinTermBudget(keywords),
     };
   }
 
@@ -263,7 +264,7 @@ export class DeepTranscriptionProvider implements TranscriptionProvider {
       // recoverable afterwards. A second pass in profanity.ts covers what this
       // list does not know, Nigerian slang in particular.
       profanity_filter: 'true',
-      keyterm: opts.keywords,
+      keyterm: withinTermBudget(opts.keywords),
       // v1 is the only diarisation model streaming accepts; v2 is batch-only
       // and returns a validation error here. Omitted entirely for a
       // single-voice room rather than set false, so no speaker field comes
