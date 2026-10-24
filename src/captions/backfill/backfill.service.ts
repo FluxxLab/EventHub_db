@@ -29,11 +29,11 @@ import {
   COVER_BEFORE_MS,
   isCovered,
   placeLines,
-  type PlacedLine,
   SESSION_LEAD_MS,
   SESSION_TAIL_MS,
 } from './backfill-plan';
 import type { BackfillSubmitDto, BackfillUploadDto } from './backfill.dto';
+import { findOffset, plainText } from './align-recording';
 
 /** What the caption-backfill queue carries. */
 export interface BackfillJob {
@@ -52,7 +52,16 @@ export interface BackfillResult {
   inserted: number;
   skipped: number;
   sessions: { id: string; title: string; inserted: number }[];
+  /** A re-caption: how far its given start time was corrected, ms (null when it could not be checked). */
+  shiftedMs?: number | null;
+  /** A re-caption: lines from an earlier run of the same recording removed from elsewhere in the day. */
+  staleRemoved?: number;
 }
+
+/** A re-caption looks for its recording in the live captions this far either side of its given start. */
+const SEARCH_MS = 12 * 60 * 60_000;
+/** A line this long or longer is distinctive enough to recognise as a copy from an earlier run. */
+const COPY_MIN_WORDS = 5;
 
 export interface BackfillStatus extends Partial<BackfillResult> {
   state: 'waiting' | 'active' | 'completed' | 'failed';
@@ -154,6 +163,7 @@ export class BackfillService {
   /** The job itself: transcribe, place, store what is new. */
   async run(job: BackfillJob): Promise<BackfillResult> {
     const recordingStart = Date.parse(job.startedAt) + job.skewMs;
+    if (job.replace) return this.recaption(job, recordingStart);
     const sessions = await this.candidateSessions(
       job.room,
       recordingStart,
@@ -197,9 +207,6 @@ export class BackfillService {
 
     const rows: TranscriptSegment[] = [];
     const counts: BackfillResult['sessions'] = [];
-    if (job.replace)
-      return this.replaceLines(job, sessions, bySession, skipped);
-
     for (const [sessionId, lines] of bySession) {
       const session = sessions.find((s) => s.id === sessionId)!;
       const said = await this.saidTimes(
@@ -245,62 +252,189 @@ export class BackfillService {
   }
 
   /**
-   * A stream's recording put in place of the live captions: in each session
-   * it covers, the machine lines said within the recording's stretch (and
-   * their translations) give way to the recording's, one clean pass with the
-   * voices told apart. Lines a person typed stay. Stored as ordinary lines,
-   * so speaker names apply to them.
+   * A stream's recording put in place of the live captions. Its start time
+   * is checked against the live captions first (see align-recording): a
+   * stream's "started" time can be hours off, and trusting it files the
+   * whole recording under the wrong sessions. Then, over the stretch it
+   * covers, every machine line in the room gives way to the recording's,
+   * whichever session it was filed under, and copies of these same lines
+   * left elsewhere in the day by an earlier, misplaced run are removed.
+   * Lines a person typed stay. Stored as ordinary lines, so speaker names
+   * apply to them.
    */
-  private async replaceLines(
+  private async recaption(
     job: BackfillJob,
-    sessions: Session[],
-    bySession: Map<string, PlacedLine[]>,
-    unplaced: number,
+    givenStart: number,
   ): Promise<BackfillResult> {
+    if (!this.transcription.transcribeUrl) {
+      throw new UnrecoverableError('Transcription is not configured');
+    }
+    if (!(await this.storage.headObject(job.key))) {
+      throw new UnrecoverableError('The recording is no longer in storage');
+    }
+    const roomSessions = await this.roomSessions(job.room);
+    if (roomSessions.length === 0) {
+      this.logger.warn(`re-caption ${job.key}: no session in ${job.room}`);
+      return { inserted: 0, skipped: 0, sessions: [], shiftedMs: null };
+    }
+    const nearby = roomSessions.filter(
+      (s) =>
+        s.endsAt.getTime() >= givenStart - SEARCH_MS &&
+        s.startsAt.getTime() <= givenStart + job.durationMs + SEARCH_MS,
+    );
+    const keywords = await this.keywordsFor(nearby.map((s) => s.id));
+    const url = await this.storage.presignRead(job.key, 60 * 60);
+    const utterances = await this.transcription.transcribeUrl(url, {
+      keywords,
+    });
+
+    // the recording's own distinctive lines: copies of them elsewhere come from an earlier run
+    const copies = new Set(
+      utterances
+        .map((u) => plainText(u.text))
+        .filter((t) => t.split(' ').length >= COPY_MIN_WORDS),
+    );
+    const ids = roomSessions.map((s) => s.id);
+    const heard = await this.roomLines(
+      ids,
+      givenStart - SEARCH_MS,
+      givenStart + job.durationMs + SEARCH_MS,
+    );
+    const found = findOffset(
+      utterances,
+      heard.filter((l) => !copies.has(plainText(l.text))),
+      givenStart,
+    );
+    const start = found ? givenStart + found.offsetMs : givenStart;
+    if (found && Math.abs(found.offsetMs) > 60_000) {
+      this.logger.warn(
+        `re-caption ${job.key} (${job.room}): start corrected by ${Math.round(found.offsetMs / 60_000)} min from ${found.matches} matching phrases`,
+      );
+    }
+
+    const sessions = roomSessions.filter(
+      (s) =>
+        (s.status === SessionStatus.LIVE ||
+          s.status === SessionStatus.COMPLETED) &&
+        s.startsAt.getTime() - SESSION_LEAD_MS <= start + job.durationMs &&
+        s.endsAt.getTime() + SESSION_TAIL_MS >= start,
+    );
+    const { placed, skipped } = placeLines(utterances, sessions, start);
+    if (placed.length === 0) {
+      return {
+        inserted: 0,
+        skipped,
+        sessions: [],
+        shiftedMs: found?.offsetMs ?? null,
+      };
+    }
+    const from = new Date(
+      Math.min(...placed.map((l) => l.start)) - COVER_BEFORE_MS,
+    );
+    const to = new Date(Math.max(...placed.map((l) => l.end)) + COVER_AFTER_MS);
+
     const rows: TranscriptSegment[] = [];
-    const counts: BackfillResult['sessions'] = [];
+    const counts = new Map<
+      string,
+      { id: string; title: string; inserted: number }
+    >();
+    let staleRemoved = 0;
     await this.segments.manager.transaction(async (manager) => {
-      for (const [sessionId, lines] of bySession) {
-        const session = sessions.find((s) => s.id === sessionId)!;
-        const from = new Date(
-          Math.min(...lines.map((l) => l.start)) - COVER_BEFORE_MS,
-        );
-        const to = new Date(
-          Math.max(...lines.map((l) => l.end)) + COVER_AFTER_MS,
-        );
+      // the room's machine lines over the stretch, in any session
+      await manager.query(
+        `DELETE FROM transcript_segments seg
+          WHERE seg."sessionId" = ANY($1::uuid[]) AND seg.source = 'ai'
+            AND ${effectiveTimeSql('seg')} BETWEEN $2 AND $3`,
+        [ids, from.toISOString(), to.toISOString()],
+      );
+      // copies of these lines elsewhere in the day, left by an earlier run
+      const stale = (
+        await this.roomLines(
+          ids,
+          Math.min(givenStart, start) - SEARCH_MS,
+          Math.max(givenStart, start) + job.durationMs + SEARCH_MS,
+          manager,
+        )
+      )
+        .filter((l) => l.source === 'ai' && copies.has(plainText(l.text)))
+        .map((l) => l.id);
+      for (let i = 0; i < stale.length; i += 500) {
         await manager.query(
-          `DELETE FROM transcript_segments seg
-            WHERE seg."sessionId" = $1 AND seg.source = 'ai'
-              AND ${effectiveTimeSql('seg')} BETWEEN $2 AND $3`,
-          [sessionId, from.toISOString(), to.toISOString()],
+          `DELETE FROM transcript_segments WHERE id = ANY($1::uuid[])`,
+          [stale.slice(i, i + 500)],
         );
-        for (const line of lines) {
-          rows.push(
-            this.segments.create({
-              sessionId,
-              room: session.room,
-              text: line.text,
-              speaker: line.speaker ?? null,
-              language: 'en',
-              source: TranscriptSource.AI,
-              backfill: false,
-              offsetMs: null,
-              createdAt: new Date(line.start),
-            }),
-          );
-        }
-        counts.push({
-          id: sessionId,
+      }
+      staleRemoved = stale.length;
+      for (const line of placed) {
+        const session = sessions.find((s) => s.id === line.sessionId)!;
+        rows.push(
+          this.segments.create({
+            sessionId: line.sessionId,
+            room: session.room,
+            text: line.text,
+            speaker: line.speaker ?? null,
+            language: 'en',
+            source: TranscriptSource.AI,
+            backfill: false,
+            offsetMs: null,
+            createdAt: new Date(line.start),
+          }),
+        );
+        const c = counts.get(session.id) ?? {
+          id: session.id,
           title: session.title,
-          inserted: lines.length,
-        });
+          inserted: 0,
+        };
+        c.inserted += 1;
+        counts.set(session.id, c);
       }
       if (rows.length > 0) await manager.save(TranscriptSegment, rows);
     });
     this.logger.log(
-      `re-caption ${job.key} (${job.room}): ${rows.length} line(s) in ${counts.length} session(s), ${unplaced} outside any session`,
+      `re-caption ${job.key} (${job.room}): ${rows.length} line(s) in ${counts.size} session(s), ${skipped} outside any session, ${staleRemoved} stale copies removed`,
     );
-    return { inserted: rows.length, skipped: unplaced, sessions: counts };
+    return {
+      inserted: rows.length,
+      skipped,
+      sessions: [...counts.values()],
+      shiftedMs: found?.offsetMs ?? null,
+      staleRemoved,
+    };
+  }
+
+  /** The room's sessions in the current event (any event when none is current). */
+  private async roomSessions(room: string): Promise<Session[]> {
+    const edition = await this.editions.current(true);
+    const qb = this.segments.manager
+      .createQueryBuilder(Session, 's')
+      .where('LOWER(TRIM(s.room)) = LOWER(TRIM(:room))', { room });
+    if (edition)
+      qb.andWhere('s.editionId = :editionId', { editionId: edition.id });
+    return qb.getMany();
+  }
+
+  /** The English lines stored in these sessions between two times, with when they were heard. */
+  private async roomLines(
+    sessionIds: string[],
+    from: number,
+    to: number,
+    manager = this.segments.manager,
+  ): Promise<{ id: string; text: string; source: string; at: number }[]> {
+    const rows = await manager.query<
+      { id: string; text: string; source: string; at: Date | string }[]
+    >(
+      `SELECT seg.id, seg.text, seg.source, ${effectiveTimeSql('seg')} AS at
+         FROM transcript_segments seg
+        WHERE seg."sessionId" = ANY($1::uuid[]) AND seg.language = 'en'
+          AND ${effectiveTimeSql('seg')} BETWEEN $2 AND $3`,
+      [sessionIds, new Date(from).toISOString(), new Date(to).toISOString()],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      text: r.text,
+      source: r.source,
+      at: new Date(r.at).getTime(),
+    }));
   }
 
   /** Deletes the uploaded recording; it is only ever read once. */

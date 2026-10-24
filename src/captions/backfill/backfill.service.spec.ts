@@ -10,6 +10,8 @@ function build(
     sessions?: unknown[];
     said?: number[];
     utterances?: unknown[];
+    /** What the room's stored lines are, as roomLines reads them. */
+    heard?: { id: string; text: string; source: string; at: number }[];
   } = {},
 ) {
   const sessionQb = {
@@ -28,21 +30,28 @@ function build(
   };
   const saved: unknown[] = [];
   const deleted: { sql: string; params: unknown[] }[] = [];
+  const heard = (opts.heard ?? []).map((h) => ({
+    ...h,
+    at: new Date(h.at).toISOString(),
+  }));
+  const readOrDelete = (sql: string, params: unknown[]) => {
+    if (sql.trim().startsWith('SELECT')) return Promise.resolve(heard);
+    deleted.push({ sql, params });
+    return Promise.resolve([]);
+  };
   const segments = {
     create: jest.fn((v: unknown) => v),
     createQueryBuilder: jest.fn(() => saidQb),
     manager: {
       createQueryBuilder: jest.fn(() => sessionQb),
+      query: readOrDelete,
       transaction: (fn: (m: unknown) => Promise<unknown>) =>
         fn({
           save: jest.fn((_e: unknown, rows: unknown[]) => {
             saved.push(...rows);
             return Promise.resolve(rows);
           }),
-          query: (sql: string, params: unknown[]) => {
-            deleted.push({ sql, params });
-            return Promise.resolve([]);
-          },
+          query: readOrDelete,
         }),
     },
   };
@@ -191,6 +200,7 @@ describe('BackfillService job', () => {
     room: 'Hall A',
     startsAt: new Date(T0),
     endsAt: new Date(T0 + 60 * 60_000),
+    status: 'completed',
   };
 
   it('stores only the lines nobody captioned, at desk start + skew + offset', async () => {
@@ -271,16 +281,98 @@ describe('BackfillService job', () => {
       inserted: 2,
       skipped: 0,
       sessions: [{ id: 'panel', title: 'Opening panel', inserted: 2 }],
+      shiftedMs: null,
+      staleRemoved: 0,
     });
-    // the live machine lines in that stretch go, a person's stay
+    // the room's live machine lines in that stretch go, in any session; a person's stay
     expect(t.deleted).toHaveLength(1);
     expect(t.deleted[0].sql).toContain(`source = 'ai'`);
-    expect(t.deleted[0].params[0]).toBe('panel');
+    expect(t.deleted[0].params[0]).toEqual(['panel']);
     // ordinary lines, so speaker names apply to them
     expect(t.saved).toEqual([
       expect.objectContaining({ text: 'Welcome everyone', backfill: false }),
       expect.objectContaining({ text: 'Captioned live too', backfill: false }),
     ]);
+  });
+
+  it('finds a stream recording’s true start from the live captions when the given one is hours off', async () => {
+    const said = [
+      'good afternoon everyone and welcome to the innovation showcase this evening',
+      'out of three hundred and forty three applications we shortlisted eighty nine',
+      'there was a further review that was double blinded and done twice over',
+      'we serve more than one hundred and twenty thousand students in Nigeria today',
+    ];
+    const trueStart = T0 + 20 * 60_000;
+    const t = build({
+      sessions: [panel],
+      utterances: said.map((text, i) => ({
+        text,
+        startMs: i * 30_000,
+        endMs: i * 30_000 + 20_000,
+      })),
+      // the live captions heard it all, in pieces, at the true time
+      heard: said.flatMap((text, i) => {
+        const ws = text.split(' ');
+        return [
+          {
+            id: `l${i}a`,
+            text: ws.slice(0, 6).join(' '),
+            source: 'ai',
+            at: trueStart + i * 30_000 + 2_000,
+          },
+          {
+            id: `l${i}b`,
+            text: ws.slice(6).join(' '),
+            source: 'ai',
+            at: trueStart + i * 30_000 + 9_000,
+          },
+        ];
+      }),
+    });
+    const result = await t.service.run({
+      room: 'Hall A',
+      key: KEY,
+      // given as six and a half hours early
+      startedAt: new Date(trueStart - 6.5 * 3_600_000).toISOString(),
+      durationMs: 3_600_000,
+      skewMs: 0,
+      replace: true,
+    });
+    expect(Math.abs((result.shiftedMs ?? 0) - 6.5 * 3_600_000)).toBeLessThan(
+      10_000,
+    );
+    expect(result.inserted).toBe(4);
+    // stored at the true time, not the given one
+    const first = (t.saved[0] as { createdAt: Date }).createdAt.getTime();
+    expect(Math.abs(first - trueStart)).toBeLessThan(10_000);
+  });
+
+  it('removes copies of the recording’s lines left elsewhere by an earlier, misplaced run', async () => {
+    const line = 'distinctive words that only this recording ever said aloud';
+    const t = build({
+      sessions: [panel],
+      utterances: [{ text: line, startMs: 0, endMs: 3_000 }],
+      heard: [
+        { id: 'old-copy', text: line, source: 'ai', at: T0 + 50 * 60_000 },
+        { id: 'typed', text: line, source: 'manual', at: T0 + 55 * 60_000 },
+        {
+          id: 'other',
+          text: 'something else entirely was said here today',
+          source: 'ai',
+          at: T0 + 50 * 60_000,
+        },
+      ],
+    });
+    const result = await t.service.run({
+      room: 'Hall A',
+      key: KEY,
+      startedAt: new Date(T0 + 10 * 60_000).toISOString(),
+      durationMs: 60_000,
+      skewMs: 0,
+      replace: true,
+    });
+    expect(result.staleRemoved).toBe(1);
+    expect(t.deleted[1].params[0]).toEqual(['old-copy']);
   });
 
   it('does not pay to transcribe when no session ran in the room', async () => {
