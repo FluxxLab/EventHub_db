@@ -33,7 +33,7 @@ import {
   SESSION_TAIL_MS,
 } from './backfill-plan';
 import type { BackfillSubmitDto, BackfillUploadDto } from './backfill.dto';
-import { findOffset, plainText } from './align-recording';
+import { findPiecewiseOffset, offsetAt, plainText } from './align-recording';
 
 /** What the caption-backfill queue carries. */
 export interface BackfillJob {
@@ -318,7 +318,9 @@ export class BackfillService {
     const live = heard.filter(
       (l) => l.source === 'ai' && !said.has(plainText(l.text)),
     );
-    const found = findOffset(utterances, live, givenStart);
+    // matched piece by piece: a stream that dropped and resumed skips the
+    // time it was down, so one start cannot fit a whole day
+    const found = findPiecewiseOffset(utterances, live, givenStart);
     // Unchecked, a wrong start replaces live captions with the wrong ones.
     // Go ahead only when there are none to lose where it would land.
     if (!found) {
@@ -331,27 +333,37 @@ export class BackfillService {
         );
       }
     }
-    const start = found ? givenStart + found.offsetMs : givenStart;
-    if (found && Math.abs(found.offsetMs) > 60_000) {
-      this.logger.warn(
-        `re-caption ${job.key} (${job.room}): start corrected by ${Math.round(found.offsetMs / 60_000)} min from ${found.matches} matching phrases`,
+    const shiftOf = (ms: number) => (found ? offsetAt(found, ms) : 0);
+    const shiftedMs = found ? found.offsets[0] : null;
+    const firstShift = found ? Math.min(...found.offsets) : 0;
+    const lastShift = found ? Math.max(...found.offsets) : 0;
+    const start = givenStart + firstShift;
+    const end = givenStart + job.durationMs + lastShift;
+    if (found) {
+      this.logger.log(
+        `re-caption ${job.key} (${job.room}): ${found.matched}/${found.pieces} piece(s) matched, shifts ${[...new Set(found.offsets.map((o) => Math.round(o / 1000)))].join(', ')} s`,
       );
     }
+    // each line moved by its own piece's shift
+    const shifted = utterances.map((u) => {
+      const d = shiftOf(u.startMs);
+      return { ...u, startMs: u.startMs + d, endMs: u.endMs + d };
+    });
 
     const sessions = roomSessions.filter(
       (s) =>
         (s.status === SessionStatus.LIVE ||
           s.status === SessionStatus.COMPLETED) &&
-        s.startsAt.getTime() - SESSION_LEAD_MS <= start + job.durationMs &&
+        s.startsAt.getTime() - SESSION_LEAD_MS <= end &&
         s.endsAt.getTime() + SESSION_TAIL_MS >= start,
     );
-    const { placed, skipped } = placeLines(utterances, sessions, start);
+    const { placed, skipped } = placeLines(shifted, sessions, givenStart);
     if (placed.length === 0) {
       return {
         inserted: 0,
         skipped,
         sessions: [],
-        shiftedMs: found?.offsetMs ?? null,
+        shiftedMs,
       };
     }
     const from = new Date(
@@ -378,7 +390,7 @@ export class BackfillService {
         await this.roomLines(
           ids,
           Math.min(givenStart, start) - SEARCH_MS,
-          Math.max(givenStart, start) + job.durationMs + SEARCH_MS,
+          Math.max(givenStart + job.durationMs, end) + SEARCH_MS,
           manager,
         )
       )
@@ -423,7 +435,7 @@ export class BackfillService {
       inserted: rows.length,
       skipped,
       sessions: [...counts.values()],
-      shiftedMs: found?.offsetMs ?? null,
+      shiftedMs,
       staleRemoved,
     };
   }

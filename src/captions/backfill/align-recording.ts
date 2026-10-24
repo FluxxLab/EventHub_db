@@ -106,3 +106,65 @@ export function findOffset(
   const median = agreeing[Math.floor(agreeing.length / 2)];
   return { offsetMs: Math.round(median), matches: agreeing.length };
 }
+
+/** A long recording is matched in pieces this long, so a break in the stream does not throw the rest off. */
+export const PIECE_MS = 20 * 60_000;
+/** A piece further than this from the others' answer is taken to be a wrong match, not a break. */
+const MAX_DRIFT_MS = 90 * 60_000;
+
+export type PiecewiseOffset = {
+  /** How far each piece of the recording is from the given start, ms, by piece index. */
+  offsets: number[];
+  /** How many pieces were matched in the live captions (the rest borrow a neighbour's). */
+  matched: number;
+  /** All the pieces' answers agreeing would mean the stream ran without a break. */
+  pieces: number;
+};
+
+/**
+ * Like findOffset, piece by piece. A live stream that dropped and resumed
+ * leaves a recording that skips the time it was down, so a single start puts
+ * everything after the drop too early. Each piece is matched on its own; a
+ * piece with too little to match (a break, music) takes the answer of the
+ * nearest matched piece before it, or after it at the start. Null when no
+ * piece matches.
+ */
+export function findPiecewiseOffset(
+  recording: RecordingLine[],
+  live: LiveLine[],
+  guessStart: number,
+  pieceMs = PIECE_MS,
+): PiecewiseOffset | null {
+  if (recording.length === 0) return null;
+  const last = Math.max(...recording.map((l) => l.startMs));
+  const pieces = Math.floor(last / pieceMs) + 1;
+  const groups: RecordingLine[][] = Array.from({ length: pieces }, () => []);
+  for (const line of recording) {
+    groups[Math.floor(line.startMs / pieceMs)].push(line);
+  }
+  const found = groups.map((g) =>
+    g.length ? (findOffset(g, live, guessStart)?.offsetMs ?? null) : null,
+  );
+  // a piece far from what most pieces say matched something else said that day
+  const sorted = found
+    .filter((x): x is number => x !== null)
+    .sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  for (let i = 0; i < found.length; i++) {
+    const x = found[i];
+    if (x !== null && Math.abs(x - median) > MAX_DRIFT_MS) found[i] = null;
+  }
+  const matched = found.filter((x) => x !== null).length;
+  if (matched === 0) return null;
+  const offsets: number[] = [];
+  let prev: number | null = null;
+  for (let i = 0; i < pieces; i++) {
+    if (found[i] !== null) prev = found[i];
+    offsets.push(prev ?? (found.find((x) => x !== null) as number));
+  }
+  return { offsets, matched, pieces };
+}
+
+/** The offset that applies at a point in the recording. */
+export const offsetAt = (p: PiecewiseOffset, ms: number, pieceMs = PIECE_MS) =>
+  p.offsets[Math.min(Math.floor(ms / pieceMs), p.offsets.length - 1)];

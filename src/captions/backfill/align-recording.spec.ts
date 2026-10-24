@@ -1,4 +1,9 @@
-import { findOffset, plainText } from './align-recording';
+import {
+  findOffset,
+  findPiecewiseOffset,
+  offsetAt,
+  plainText,
+} from './align-recording';
 
 const SPEECH = [
   'Good afternoon everyone and welcome to the innovation showcase',
@@ -76,5 +81,53 @@ describe('finding a recording on the day', () => {
 
   it('compares text plainly', () => {
     expect(plainText("Okay, so — it's   AI!")).toBe("okay so it's ai");
+  });
+});
+
+describe('finding a long recording piece by piece', () => {
+  const PIECE = 20 * 60_000;
+  // four pieces of distinct speech, one line every 20 s
+  const speech = (piece: number) =>
+    Array.from(
+      { length: 50 },
+      (_, i) =>
+        `piece ${piece} line ${i} speaker talks about topic${piece}x${i} and policy${i}y${piece} with partners`,
+    );
+  const rec = [0, 1, 2, 3].flatMap((p) =>
+    speech(p).map((text, i) => ({
+      text,
+      startMs: p * PIECE + i * 20_000,
+      endMs: p * PIECE + i * 20_000 + 15_000,
+    })),
+  );
+  const start = DAY + 10 * H;
+
+  it('follows a break in the stream', () => {
+    // the stream was down 3 minutes before piece 2: the live clock runs on
+    const gap = 3 * 60_000;
+    const live = rec.map((l) => ({
+      text: l.text,
+      at: start + l.startMs + 2_000 + (l.startMs >= 2 * PIECE ? gap : 0),
+    }));
+    const found = findPiecewiseOffset(rec, live, start)!;
+    expect(found.matched).toBe(4);
+    expect(Math.abs(found.offsets[0])).toBeLessThan(10_000);
+    expect(Math.abs(found.offsets[1])).toBeLessThan(10_000);
+    expect(Math.abs(found.offsets[2] - gap)).toBeLessThan(10_000);
+    expect(Math.abs(found.offsets[3] - gap)).toBeLessThan(10_000);
+  });
+
+  it('lends a matched piece its answer to one with nothing to match', () => {
+    const live = rec
+      .filter((l) => l.startMs < PIECE || l.startMs >= 2 * PIECE)
+      .map((l) => ({ text: l.text, at: start + l.startMs + 2_000 }));
+    const found = findPiecewiseOffset(rec, live, start)!;
+    expect(found.matched).toBe(3);
+    expect(Math.abs(found.offsets[1])).toBeLessThan(10_000);
+    expect(offsetAt(found, PIECE + 60_000)).toBe(found.offsets[1]);
+  });
+
+  it('gives no answer when no piece matches', () => {
+    expect(findPiecewiseOffset(rec, [], start)).toBeNull();
   });
 });
