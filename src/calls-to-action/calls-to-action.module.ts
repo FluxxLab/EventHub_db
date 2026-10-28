@@ -8,6 +8,7 @@ import { ClaudeAnalysisProvider } from './analysis/claude.provider';
 import { StorageService } from '../common/storage/storage.service';
 import { ClaudeDeckDesigner } from './deck/deck-designer';
 import { ClaudeRapporteurWriter } from './report/rapporteur-writer';
+import { ClaudeTopBriefWriter } from './report/top-brief-writer';
 import { CallsToActionController } from './calls-to-action.controller';
 import { CallsToActionService } from './calls-to-action.service';
 import { NightlyTidyService } from './nightly/nightly-tidy.service';
@@ -34,6 +35,8 @@ import { ClaudeStakeholderLinker } from './stakeholder-linker';
     ClaudeDeckDesigner,
     // the session's rapporteur report, filled into the Word template by the console
     ClaudeRapporteurWriter,
+    // the event's abridged brief of its top recommendations and commitments
+    ClaudeTopBriefWriter,
     // which of the event's organisations a broad target such as "Federal Government" covers
     ClaudeStakeholderLinker,
     StorageService,

@@ -163,6 +163,7 @@ function setup(
     rapporteur,
     {} as never, // stakeholder links: see stakeholders.spec and stakeholder-linker.spec
     {} as never, // the stakeholder linker: likewise
+    {} as never, // the top brief writer: see top-brief.spec
   );
   return {
     service,

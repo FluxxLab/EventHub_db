@@ -28,6 +28,7 @@ import {
   MergeCallsToActionDto,
   SaveCallToActionDto,
   SetStakeholderLinkDto,
+  TopBriefDto,
 } from './dto/calls-to-action.dto';
 
 /** An event's calls to action: analysed from its sessions, reviewed by its organisers. */
@@ -194,6 +195,26 @@ export class CallsToActionController {
   })
   writeReport(@Param('id', ParseUUIDPipe) id: string) {
     return this.calls.writeReport(id);
+  }
+
+  @Post('editions/:id/calls-to-action/top-brief')
+  @HttpCode(200)
+  @Roles(AccessTier.ADMIN, AccessTier.EVENT_ADMIN)
+  @EditionScoped({ from: 'param', key: 'id' })
+  @Audit({
+    type: 'top_brief_written',
+    description:
+      'Abridged brief of the top recommendations and commitments written',
+  })
+  @ApiOperation({
+    summary:
+      "The event's top recommendations and commitments for its theme, picked by AI from its calls to action, for an abridged brief",
+  })
+  writeTopBrief(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TopBriefDto,
+  ) {
+    return this.calls.writeTopBrief(id, dto);
   }
 
   @Get('editions/:id/calls-to-action/deck-images')

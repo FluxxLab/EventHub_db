@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -151,6 +152,37 @@ export class DeckScopeDto {
   @IsInt()
   @Min(1)
   day?: number;
+}
+
+/** What the event's abridged top-recommendations brief is picked for. */
+export class TopBriefDto {
+  @ApiPropertyOptional({
+    description:
+      "The theme to rank against; the event's description when left out",
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  theme?: string;
+
+  @ApiPropertyOptional({
+    description: 'Also consider calls still pending review (default true)',
+  })
+  @IsOptional()
+  @IsBoolean()
+  includePending?: boolean;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 10,
+    description: 'How many of each kind to pick (default 5)',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  count?: number;
 }
 
 /** Confirming or rejecting a suggested stakeholder link. */

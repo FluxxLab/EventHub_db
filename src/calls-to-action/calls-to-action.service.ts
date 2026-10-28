@@ -31,6 +31,8 @@ import { cleanDesign, type DeckDesign } from './deck/deck-design';
 import { ClaudeDeckDesigner, type DeckImage } from './deck/deck-designer';
 import { cleanReport } from './report/rapporteur-report';
 import { ClaudeRapporteurWriter } from './report/rapporteur-writer';
+import { assembleBrief, type StoredCall } from './report/top-brief';
+import { ClaudeTopBriefWriter } from './report/top-brief-writer';
 import {
   mapStakeholders,
   presentLine,
@@ -118,7 +120,90 @@ export class CallsToActionService {
     @InjectRepository(StakeholderLink)
     private readonly links: Repository<StakeholderLink>,
     private readonly linker: ClaudeStakeholderLinker,
+    private readonly briefWriter: ClaudeTopBriefWriter,
   ) {}
+
+  /**
+   * The event's abridged brief: the top recommendations and commitments for
+   * its theme, picked by Claude from the calls organisers have kept
+   * (approved, and those still pending when asked). Speakers, quotes and
+   * sessions come from the stored calls; the console turns it into Word.
+   */
+  async writeTopBrief(
+    editionId: string,
+    opts: { theme?: string; includePending?: boolean; count?: number },
+  ) {
+    if (!this.briefWriter.configured) {
+      throw new ServiceUnavailableException(
+        "AI briefs aren't set up yet. Ask your administrator.",
+      );
+    }
+    const edition = await this.editions.findById(editionId);
+    const theme =
+      opts.theme?.trim() || edition.description?.trim() || edition.name;
+    const count = Math.min(Math.max(opts.count ?? 5, 1), 10);
+    const kept = await this.calls.find({
+      where: {
+        editionId,
+        status: In(
+          opts.includePending === false
+            ? ['approved']
+            : ['approved', 'suggested'],
+        ),
+      },
+      order: { type: 'ASC', status: 'ASC', createdAt: 'ASC' },
+    });
+    if (kept.length === 0) {
+      throw new BadRequestException(
+        opts.includePending === false
+          ? 'No calls to action are approved yet. Approve some, or include those pending review.'
+          : 'This event has no calls to action yet. Analyse its sessions first.',
+      );
+    }
+    const ids = [
+      ...new Set(kept.map((c) => c.sessionId).filter((s): s is string => !!s)),
+    ];
+    const titles = new Map<string, string>(
+      ids.length
+        ? (
+            (await this.dataSource.query(
+              'SELECT id::text AS id, title FROM sessions WHERE id::text = ANY($1)',
+              [ids],
+            )) as { id: string; title: string }[]
+          ).map((r) => [r.id, r.title])
+        : [],
+    );
+    const stored: StoredCall[] = kept.map((c) => ({
+      type: c.type,
+      approved: c.status === 'approved',
+      action: c.action,
+      directedAt: c.directedAt,
+      proposedBy: c.proposedBy,
+      proposedByOrganisation: c.proposedByOrganisation,
+      alsoProposedBy: c.alsoProposedBy ?? [],
+      deadline: c.deadline,
+      amount: c.amount,
+      session: c.sessionId ? (titles.get(c.sessionId) ?? null) : null,
+      quote: c.quote,
+    }));
+    const { answer, reason } = await this.briefWriter.pick(
+      edition.name,
+      theme,
+      count,
+      // the quote stays out of the prompt: Claude ranks, the stored words are printed
+      stored.map(({ quote: _quote, ...c }) => c),
+    );
+    if (!answer) throw new ServiceUnavailableException(reason);
+    return {
+      event: edition.name,
+      theme,
+      read: {
+        approved: stored.filter((c) => c.approved).length,
+        pending: stored.filter((c) => !c.approved).length,
+      },
+      ...assembleBrief(answer, stored, count),
+    };
+  }
 
   /**
    * The session's rapporteur report, written by Claude from its whole named
