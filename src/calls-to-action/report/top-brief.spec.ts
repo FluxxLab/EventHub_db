@@ -79,8 +79,8 @@ describe('the top brief', () => {
     const calls = [
       call(),
       call({ type: 'pledge', approved: false }),
-      call(),
-      call(),
+      call({ proposedBy: 'B', session: 'S2' }),
+      call({ proposedBy: 'C', session: 'S3' }),
     ];
     const brief = assembleBrief(
       answer({
@@ -101,17 +101,44 @@ describe('the top brief', () => {
     expect(brief.honourableMentions).toEqual(['a', 'b', 'c']);
   });
 
+  it('spreads the picks across speakers and sessions, using reserves first', () => {
+    const calls = [
+      call({ proposedBy: 'Ann', session: 'S1' }),
+      call({ proposedBy: 'Ann', session: 'S1' }), // same speaker: waits
+      call({ proposedBy: 'Bo', session: 'S1' }),
+      call({ proposedBy: 'Cy', session: 'S1' }), // third from S1: waits
+      call({ proposedBy: 'Di', session: 'S2' }),
+    ];
+    const picks = [1, 2, 3, 4, 5].map((r) => pick(r));
+    expect(
+      assembleBrief(
+        answer({ recommendations: picks }),
+        calls,
+        3,
+      ).recommendations.map((r) => r.title),
+    ).toEqual(['Pick 1', 'Pick 3', 'Pick 5']);
+    // with too few others, the held-back picks fill the list, in Claude's order
+    const four = assembleBrief(answer({ recommendations: picks }), calls, 4);
+    expect(four.recommendations.map((r) => r.title)).toEqual([
+      'Pick 1',
+      'Pick 2',
+      'Pick 3',
+      'Pick 5',
+    ]);
+    expect(four.recommendations.map((r) => r.rank)).toEqual([1, 2, 3, 4]);
+  });
+
   it('numbers the calls for Claude and marks those pending review', () => {
     const prompt = topBriefPrompt(
       'Build 2026',
-      'Shared compute',
       5,
       [
         call(),
         call({ type: 'pledge', approved: false, alsoProposedBy: ['NCDC'] }),
       ].map(({ quote: _q, ...c }) => c),
     );
-    expect(prompt).toContain('Theme: Shared compute');
+    expect(prompt).not.toContain('Theme');
+    expect(prompt).toContain('(2, from 1 sessions)');
     expect(prompt).toContain(
       '1. [recommendation] Map national compute capacity.',
     );
@@ -119,7 +146,8 @@ describe('the top brief', () => {
     expect(prompt).toContain('also raised by: NCDC');
     expect(prompt).not.toContain('One is to map');
     expect(prompt).toContain(
-      'Pick the top 5 recommendations and the top 5 commitments',
+      'Pick the top 5 recommendations and the top 5 commitments from across the whole event',
     );
+    expect(prompt).toContain('10 of each kind in all');
   });
 });

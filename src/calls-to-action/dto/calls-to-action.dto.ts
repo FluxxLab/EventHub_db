@@ -154,13 +154,10 @@ export class DeckScopeDto {
   day?: number;
 }
 
-/** What the event's abridged top-recommendations brief is picked for. */
+/** How the event's abridged top-recommendations brief is picked. */
 export class TopBriefDto {
-  @ApiPropertyOptional({
-    description:
-      "The theme to rank against; the event's description when left out",
-    maxLength: 500,
-  })
+  /** No longer used: the brief ranks across the whole event. Still accepted so older consoles work. */
+  @ApiPropertyOptional({ deprecated: true, maxLength: 500 })
   @IsOptional()
   @IsString()
   @MaxLength(500)
@@ -175,13 +172,13 @@ export class TopBriefDto {
 
   @ApiPropertyOptional({
     minimum: 1,
-    maximum: 10,
-    description: 'How many of each kind to pick (default 5)',
+    maximum: 15,
+    description: 'How many of each kind to pick (default 10)',
   })
   @IsOptional()
   @IsInt()
   @Min(1)
-  @Max(10)
+  @Max(15)
   count?: number;
 }
 

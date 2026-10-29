@@ -124,14 +124,14 @@ export class CallsToActionService {
   ) {}
 
   /**
-   * The event's abridged brief: the top recommendations and commitments for
-   * its theme, picked by Claude from the calls organisers have kept
+   * The event's abridged brief: the top recommendations and commitments from
+   * across all its sessions, picked by Claude from the calls organisers have kept
    * (approved, and those still pending when asked). Speakers, quotes and
    * sessions come from the stored calls; the console turns it into Word.
    */
   async writeTopBrief(
     editionId: string,
-    opts: { theme?: string; includePending?: boolean; count?: number },
+    opts: { includePending?: boolean; count?: number },
   ) {
     if (!this.briefWriter.configured) {
       throw new ServiceUnavailableException(
@@ -139,9 +139,7 @@ export class CallsToActionService {
       );
     }
     const edition = await this.editions.findById(editionId);
-    const theme =
-      opts.theme?.trim() || edition.description?.trim() || edition.name;
-    const count = Math.min(Math.max(opts.count ?? 5, 1), 10);
+    const count = Math.min(Math.max(opts.count ?? 10, 1), 15);
     const kept = await this.calls.find({
       where: {
         editionId,
@@ -188,7 +186,6 @@ export class CallsToActionService {
     }));
     const { answer, reason } = await this.briefWriter.pick(
       edition.name,
-      theme,
       count,
       // the quote stays out of the prompt: Claude ranks, the stored words are printed
       stored.map(({ quote: _quote, ...c }) => c),
@@ -196,7 +193,6 @@ export class CallsToActionService {
     if (!answer) throw new ServiceUnavailableException(reason);
     return {
       event: edition.name,
-      theme,
       read: {
         approved: stored.filter((c) => c.approved).length,
         pending: stored.filter((c) => !c.approved).length,

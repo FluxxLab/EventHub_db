@@ -208,7 +208,7 @@ export class CallsToActionController {
   })
   @ApiOperation({
     summary:
-      "The event's top recommendations and commitments for its theme, picked by AI from its calls to action, for an abridged brief",
+      "The event's top recommendations and commitments from across all its sessions, picked by AI from its calls to action, for an abridged brief",
   })
   writeTopBrief(
     @Param('id', ParseUUIDPipe) id: string,

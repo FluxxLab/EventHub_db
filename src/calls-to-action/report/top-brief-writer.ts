@@ -12,8 +12,8 @@ import {
 const DEFAULT_MODEL = 'claude-opus-5-5';
 
 /**
- * Asks Claude to pick the event's top recommendations and commitments for
- * its theme. Returns the reason instead of throwing when Claude is not set
+ * Asks Claude to pick the event's top recommendations and commitments from
+ * across all its sessions. Returns the reason instead of throwing when Claude is not set
  * up or cannot answer, for the console to show.
  */
 @Injectable()
@@ -36,7 +36,6 @@ export class ClaudeTopBriefWriter {
 
   async pick(
     event: string,
-    theme: string,
     count: number,
     calls: BriefCall[],
   ): Promise<{ answer: TopBriefAnswer | null; reason: string | null }> {
@@ -45,14 +44,14 @@ export class ClaudeTopBriefWriter {
     try {
       const response = await this.client.beta.messages.parse({
         model: this.model,
-        max_tokens: 8000,
+        max_tokens: 16000,
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
         system: TOP_BRIEF_INSTRUCTIONS,
         messages: [
           {
             role: 'user',
-            content: topBriefPrompt(event, theme, count, calls),
+            content: topBriefPrompt(event, count, calls),
           },
         ],
         output_config: {
